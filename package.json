@@ -4,20 +4,21 @@
     "description": "Bot qui détecte les confluences d'achats et ventes de cryptomonnaies à partir des données de wallet tracker Telegram",
     "main": "src/index.js",
     "scripts": {
-      "start": "node src/index.js",
-      "dev": "nodemon src/index.js",
-      "test": "echo \"Error: no test specified\" && exit 1"
+        "start": "node src/index.js",
+        "dev": "nodemon src/index.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
     },
     "author": "",
     "license": "MIT",
     "dependencies": {
-      "dotenv": "latest",
-      "telegraf": "latest",
-      "node-telegram-bot-api": "latest",
-      "winston": "latest",
-      "node-cache": "latest"
+        "dotenv": "latest",
+        "mongodb": "^6.15.0",
+        "node-cache": "latest",
+        "node-telegram-bot-api": "latest",
+        "telegraf": "latest",
+        "winston": "latest"
     },
     "devDependencies": {
-      "nodemon": "latest"
+        "nodemon": "latest"
     }
-  }
+}

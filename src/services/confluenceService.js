@@ -1,24 +1,52 @@
+// src/services/confluenceService.js
 const NodeCache = require('node-cache');
 const config = require('../config/config');
 const logger = require('../utils/logger');
+const transactionService = require('../db/services/transactionService');
 
 /**
  * Service to detect buy and sell confluences
  */
 const confluenceService = {
-  // Cache to store recent transactions
+  // Cache to store recent transactions for fast access
   transactionsCache: new NodeCache({ stdTTL: config.confluence.windowMinutes * 60 }),
   
   // Cache to store already detected confluences to avoid duplicates
   detectedConfluences: new NodeCache({ stdTTL: config.confluence.windowMinutes * 60 }),
   
   /**
+   * Initialize the confluence service
+   * @returns {Promise<void>}
+   */
+  async initialize() {
+    try {
+      // Load recent transactions from MongoDB
+      const transactions = await transactionService.loadRecentTransactions(config.confluence.windowMinutes);
+      
+      // Populate the cache
+      for (const [key, txList] of Object.entries(transactions)) {
+        this.transactionsCache.set(key, txList);
+      }
+      
+      logger.info(`Confluence service initialized with ${Object.keys(transactions).length} transaction groups`);
+    } catch (error) {
+      logger.error(`Error initializing confluence service: ${error.message}`);
+    }
+  },
+  
+  /**
    * Add a transaction to the service
    * @param {Transaction} transaction - Transaction to add
+   * @param {string} groupId - Group ID
    */
-  addTransaction(transaction) {
+  async addTransaction(transaction, groupId = 'default') {
     try {
-      const key = `${transaction.type}_${transaction.coin}`;
+      const key = `${groupId}_${transaction.type}_${transaction.coin}`;
+      
+      // Store in MongoDB first
+      await transactionService.storeTransaction(transaction, groupId);
+      
+      // Then update the cache
       let transactions = this.transactionsCache.get(key) || [];
       
       // Add the new transaction
@@ -27,29 +55,40 @@ const confluenceService = {
         walletName: transaction.walletName,
         amount: transaction.amount,
         usdValue: transaction.usdValue,
-        timestamp: transaction.timestamp
+        timestamp: transaction.timestamp,
+        marketCap: transaction.marketCap || 0
       });
       
       // Save to cache
       this.transactionsCache.set(key, transactions);
       
-      logger.debug(`Transaction added: ${transaction.type} ${transaction.amount} ${transaction.coin} by ${transaction.walletName}`);
+      logger.debug(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin} by ${transaction.walletName}`);
+      return true;
     } catch (error) {
       logger.error('Error adding transaction:', error);
+      return false;
     }
   },
   
   /**
    * Check for confluences
+   * @param {string} groupId - Group ID
    * @returns {Array} - List of detected confluences
    */
-  checkConfluences() {
+  checkConfluences(groupId = 'default') {
     try {
       const confluences = [];
       const keys = this.transactionsCache.keys();
       
-      for (const key of keys) {
-        const [type, coin] = key.split('_');
+      // Filter keys for this group
+      const groupKeys = keys.filter(key => key.startsWith(`${groupId}_`));
+      
+      for (const key of groupKeys) {
+        // Extract type and coin from key (format: "groupId_type_coin")
+        const parts = key.split('_');
+        const type = parts[1];
+        const coin = parts[2];
+        
         const transactions = this.transactionsCache.get(key) || [];
         
         // Group by wallet
@@ -69,10 +108,12 @@ const confluenceService = {
         
         // Check if enough different wallets made a transaction
         const wallets = [...walletMap.values()];
-        if (wallets.length >= config.confluence.minWallets) {
+        const minWallets = this.getMinWalletsForGroup(groupId);
+        
+        if (wallets.length >= minWallets) {
           // Calculate a unique key for this confluence
           const walletAddresses = wallets.map(w => w.walletAddress).sort().join('_');
-          const confluenceKey = `${type}_${coin}_${walletAddresses}`;
+          const confluenceKey = `${groupId}_${type}_${coin}_${walletAddresses}`;
           
           // Check if this confluence has already been detected recently
           if (!this.detectedConfluences.has(confluenceKey)) {
@@ -101,11 +142,12 @@ const confluenceService = {
               totalAmount: wallets.reduce((sum, w) => sum + w.amount, 0),
               totalUsdValue: wallets.reduce((sum, w) => sum + (w.usdValue || 0), 0),
               avgMarketCap,
-              timestamp: new Date()
+              timestamp: new Date(),
+              groupId // Add groupId for reference
             };
             
             confluences.push(confluence);
-            logger.info(`Confluence detected: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin}`);
+            logger.info(`Confluence detected for group ${groupId}: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin}`);
           }
         }
       }
@@ -118,9 +160,19 @@ const confluenceService = {
   },
   
   /**
+   * Get minimum wallets setting for a group
+   * @param {string} groupId - Group ID
+   * @returns {number} Minimum wallets setting
+   */
+  getMinWalletsForGroup(groupId) {
+    // This could be extended to get group-specific settings from the database
+    return config.confluence.minWallets;
+  },
+  
+  /**
    * Clean transactions that are too old
    */
-  cleanOldTransactions() {
+  async cleanOldTransactions() {
     try {
       const keys = this.transactionsCache.keys();
       const now = new Date();

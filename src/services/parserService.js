@@ -12,17 +12,15 @@ const parserService = {
    */
   parseTrackerMessage(message) {
     try {
-      // Log the first part of the message for debugging
+      // Log the message for debugging
       logger.info('New message detected: ' + message.substring(0, 100).replace(/\n/g, ' ') + '...');
       
       // Detailed logging to debug regex matches
       logger.debug('Checking message patterns:');
       logger.debug('Contains "Swapped": ' + message.includes('Swapped'));
       logger.debug('Contains "Received": ' + message.includes('Received'));
-      logger.debug('BUY pattern match: ' + !!message.match(/Swapped\s+[\d,.]+\s+#(SOL|ETH).+for\s+[\d,.]+\s+#([A-Z0-9]+)/i));
-      logger.debug('SELL pattern match: ' + !!message.match(/Swapped\s+[\d,.]+\s+#([A-Z0-9]+).+for\s+[\d,.]+\s+#(SOL|ETH)/i));
       
-      // Extract the wallet name (appears after # at the beginning of the message)
+      // Extract wallet name (appears after # at beginning of message)
       const walletNameMatch = message.match(/^#([^\n]+)/);
       const walletName = walletNameMatch ? walletNameMatch[1] : null;
       logger.debug('Wallet name match: ' + (walletName || 'none'));
@@ -32,19 +30,58 @@ const parserService = {
       const walletAddress = walletAddressMatch ? walletAddressMatch[1] : 'unknown';
       logger.debug('Wallet address match: ' + walletAddress);
       
+      // Determine transaction type based on emoji
+      let transactionType = null;
+      if (message.includes('🟢')) {
+        transactionType = 'buy';
+      } else if (message.includes('🔴')) {
+        transactionType = 'sell';
+      }
+      
       // Check if this is a Swap transaction
       if (message.includes('Swapped')) {
-        // BUY: If SOL/ETH is being swapped FOR a token
-        if (message.match(/Swapped\s+[\d,.]+\s+#(SOL|ETH).+for\s+[\d,.]+\s+#([A-Z0-9]+)/i)) {
-          // Extract base token (SOL/ETH) amount
-          const baseMatch = message.match(/Swapped\s+([\d,.]+)\s+#(SOL|ETH)/i);
-          const baseAmount = baseMatch ? parseFloat(baseMatch[1].replace(/,/g, '')) : 0;
-          const baseSymbol = baseMatch ? baseMatch[2] : 'unknown';
+        // Look for patterns that represent buying (SOL/ETH -> Token)
+        const buyPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH).+for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9]+)/i;
+        const buyMatch = message.match(buyPattern);
+        
+        // Look for patterns that represent selling (Token -> SOL/ETH)
+        const sellPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9]+).+for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH)/i;
+        const sellMatch = message.match(sellPattern);
+        
+        logger.debug('BUY pattern match: ' + !!buyMatch);
+        logger.debug('SELL pattern match: ' + !!sellMatch);
+        
+        // BUY case - SOL/ETH being swapped FOR a token
+        if (buyMatch || (transactionType === 'buy' && message.includes('Swapped'))) {
+          // Try different regex patterns to extract the values
+          let baseAmount = 0;
+          let baseSymbol = 'unknown';
+          let tokenAmount = 0;
+          let tokenSymbol = 'unknown';
           
-          // Extract token symbol and amount
-          const tokenMatch = message.match(/for\s+([\d,.]+)\s+#([A-Z0-9]+)/i);
-          const tokenAmount = tokenMatch ? parseFloat(tokenMatch[1].replace(/,/g, '')) : 0;
-          const tokenSymbol = tokenMatch ? tokenMatch[2] : 'unknown';
+          // Try to extract from the standard pattern
+          if (buyMatch) {
+            baseAmount = parseFloat(buyMatch[1].replace(/[^\d.]/g, ''));
+            baseSymbol = buyMatch[2];
+            tokenAmount = parseFloat(buyMatch[3].replace(/[^\d.]/g, ''));
+            tokenSymbol = buyMatch[4];
+          } 
+          // Fallback to more generic extraction based on emoji and context
+          else {
+            // Extract base token (SOL/ETH) amount
+            const baseMatch = message.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH)/i);
+            if (baseMatch) {
+              baseAmount = parseFloat(baseMatch[1].replace(/[^\d.]/g, ''));
+              baseSymbol = baseMatch[2];
+            }
+            
+            // Extract token symbol and amount
+            const tokenMatch = message.match(/for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9]+)/i);
+            if (tokenMatch) {
+              tokenAmount = parseFloat(tokenMatch[1].replace(/[^\d.]/g, ''));
+              tokenSymbol = tokenMatch[2];
+            }
+          }
           
           // Extract USD value
           const usdMatch = message.match(/\$\s*([\d,.]+)/);
@@ -76,17 +113,37 @@ const parserService = {
           );
         }
         
-        // SELL: If a token is being swapped FOR SOL/ETH
-        if (message.match(/Swapped\s+[\d,.]+\s+#([A-Z0-9]+).+for\s+[\d,.]+\s+#(SOL|ETH)/i)) {
-          // Extract token symbol and amount
-          const tokenMatch = message.match(/Swapped\s+([\d,.]+)\s+#([A-Z0-9]+)/i);
-          const tokenAmount = tokenMatch ? parseFloat(tokenMatch[1].replace(/,/g, '')) : 0;
-          const tokenSymbol = tokenMatch ? tokenMatch[2] : 'unknown';
+        // SELL case - Token being swapped FOR SOL/ETH
+        if (sellMatch || (transactionType === 'sell' && message.includes('Swapped'))) {
+          // Try different regex patterns to extract the values
+          let baseAmount = 0;
+          let baseSymbol = 'unknown';
+          let tokenAmount = 0;
+          let tokenSymbol = 'unknown';
           
-          // Extract base token (SOL/ETH) amount
-          const baseMatch = message.match(/for\s+([\d,.]+)\s+#(SOL|ETH)/i);
-          const baseAmount = baseMatch ? parseFloat(baseMatch[1].replace(/,/g, '')) : 0;
-          const baseSymbol = baseMatch ? baseMatch[2] : 'unknown';
+          // Try to extract from the standard pattern
+          if (sellMatch) {
+            tokenAmount = parseFloat(sellMatch[1].replace(/[^\d.]/g, ''));
+            tokenSymbol = sellMatch[2];
+            baseAmount = parseFloat(sellMatch[3].replace(/[^\d.]/g, ''));
+            baseSymbol = sellMatch[4];
+          } 
+          // Fallback to more generic extraction based on emoji and context
+          else {
+            // Extract token symbol and amount
+            const tokenMatch = message.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9]+)/i);
+            if (tokenMatch) {
+              tokenAmount = parseFloat(tokenMatch[1].replace(/[^\d.]/g, ''));
+              tokenSymbol = tokenMatch[2];
+            }
+            
+            // Extract base token (SOL/ETH) amount
+            const baseMatch = message.match(/for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH)/i);
+            if (baseMatch) {
+              baseAmount = parseFloat(baseMatch[1].replace(/[^\d.]/g, ''));
+              baseSymbol = baseMatch[2];
+            }
+          }
           
           // Extract USD value
           const usdMatch = message.match(/\$\s*([\d,.]+)/);

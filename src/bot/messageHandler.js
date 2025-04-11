@@ -1,50 +1,39 @@
 const logger = require('../utils/logger');
-const parserService = require('../services/parserService');
-const confluenceService = require('../services/confluenceService');
-const telegramMessageService = require('../services/telegramMessageService');
+const helpers = require('./helpers');
 
 /**
- * Register message handler for transaction detection
+ * Register message handler for the bot
  * @param {TelegramBot} bot - The Telegram bot instance
  */
 function registerMessageHandler(bot) {
   bot.on('message', async (msg) => {
     try {
-      // Ignore commands and service messages
+      // Ignore commands
       if (msg.text && msg.text.startsWith('/')) {
         return;
       }
 
       const chatId = msg.chat.id;
       
-      // Debug log the message
-      logger.debug('Processing message content:', msg.text);
-
-      // Parse the message to extract transaction information
-      const transaction = parserService.parseTrackerMessage(msg.text);
-      
-      // If it's not a buy or sell transaction, ignore
-      if (!transaction || (transaction.type !== 'buy' && transaction.type !== 'sell')) {
-        logger.debug('Ignoring message - not a valid transaction');
+      // Si c'est un chat privé et que le message commence par @, c'est probablement un nom de tracker
+      if (msg.chat.type === 'private' && msg.text && msg.text.startsWith('@')) {
+        const trackerName = msg.text.trim();
+        logger.debug(`User ${msg.from.username || msg.from.first_name} entered tracker: ${trackerName}`);
+        
+        // Envoyer les instructions de configuration
+        helpers.sendSetupInstructions(bot, chatId, trackerName);
+        
+        // Informer l'utilisateur
+        bot.sendMessage(
+          chatId,
+          `I've registered ${trackerName} for monitoring. Once you add me to a group and complete the setup, I'll start tracking transactions from this source.`
+        );
         return;
       }
-
-      // Add the transaction to the confluence detection service
-      confluenceService.addTransaction(transaction);
-      logger.info(`Transaction added to confluence tracker: ${transaction.type.toUpperCase()} ${transaction.amount} ${transaction.coin}`);
-
-      // Check for confluences
-      const confluences = confluenceService.checkConfluences();
-      logger.debug(`Checked for confluences. Found: ${confluences.length}`);
       
-      // If there are confluences, send alerts
-      if (confluences && confluences.length > 0) {
-        for (const confluence of confluences) {
-          const message = telegramMessageService.formatConfluenceMessage(confluence);
-          bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-          logger.info(`Confluence detected for ${confluence.coin}: ${confluence.wallets.length} wallets`);
-        }
-      }
+      // Tous les autres messages sont ignorés, car le traitement des transactions
+      // est maintenant géré directement par le forwarder
+      
     } catch (error) {
       logger.error('Error processing message:', error);
     }

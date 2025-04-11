@@ -1,4 +1,5 @@
 const config = require('../config/config');
+const logger = require('../utils/logger')
 
 /**
  * Helper functions for the bot
@@ -11,6 +12,9 @@ const helpers = {
    * @param {string} tracker - Tracker name
    */
   sendSetupInstructions(bot, chatId, tracker) {
+    // Remove @ from tracker name if present for processing
+    const trackerName = tracker.replace(/^@/, '');
+    
     // Create "Add to Group" button
     const addToGroupButton = {
       inline_keyboard: [[{
@@ -19,21 +23,33 @@ const helpers = {
       }]]
     };
     
+    // Send message without any parse_mode to avoid formatting issues
     bot.sendMessage(
       chatId,
-      `Great! You've selected *${tracker}* to monitor.\n\n` +
+      `Great! You've selected ${tracker} to monitor.\n\n` +
       `Please follow these steps:\n\n` +
       `1️⃣ Add me (@${config.telegram.botUsername}) to your group\n` +
-      `2️⃣ Add *${tracker}* to the same group\n` +
+      `2️⃣ Add ${tracker} to the same group\n` +
       `3️⃣ Add our forwarder account (@${config.telegram.forwarderUsername || 'YourForwarderUsername'}) to the group\n` +
       `4️⃣ Make both me and the forwarder admin in the group (we need to read messages)\n` +
-      `5️⃣ Send /setup ${tracker} in the group to activate monitoring\n\n` +
+      `5️⃣ Send /setup ${trackerName} in the group to activate monitoring\n\n` +
       `Once set up, I'll alert you when multiple wallets buy or sell the same coin!`,
       {
-        parse_mode: 'Markdown',
+        // No parse_mode here
         reply_markup: addToGroupButton
       }
-    );
+    ).catch(error => {
+      logger.error(`Failed to send plain setup instructions: ${error.message}`);
+      
+      // Ultimate fallback with minimal formatting
+      bot.sendMessage(
+        chatId,
+        `I'll monitor ${tracker} for you. Add me to your group, then type /setup ${trackerName} there.`,
+        {
+          reply_markup: addToGroupButton
+        }
+      );
+    });
   },
 
   /**

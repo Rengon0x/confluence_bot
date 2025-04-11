@@ -38,7 +38,7 @@
 
 module.exports = {
     // Collection name
-    collectionName: 'groups',
+    collectionName: 'confluence_groups',
     
     // Indexes to create
     indexes: [

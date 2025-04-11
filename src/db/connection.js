@@ -48,8 +48,8 @@ async function connectToDatabase() {
     if (!db) {
         const client = initializeClient();
         await client.connect();
-        db = client.db("confluence_bot");
-        logger.info("Connected to MongoDB database: confluence_bot");
+        db = client.db("telegram_bot");
+        logger.info("Connected to MongoDB database: telegram_bot");
         
         // Set up indexes based on model definitions
         await setupIndexes(db);
@@ -89,6 +89,19 @@ async function setupIndexes(database) {
                 await groupCollection.createIndex(index.key, { 
                     unique: index.unique || false,
                     background: true 
+                });
+            }
+        }
+
+        // Create indexes for transactions collection
+        if (TransactionModel.indexes) {
+            const transactionCollection = database.collection(TransactionModel.collectionName);
+            for (const index of TransactionModel.indexes) {
+                await transactionCollection.createIndex(index.key, { 
+                    unique: index.unique || false,
+                    background: true,
+                    // Ajouter l'expiration si c'est un index TTL
+                    ...(index.expireAfterSeconds && { expireAfterSeconds: index.expireAfterSeconds })
                 });
             }
         }

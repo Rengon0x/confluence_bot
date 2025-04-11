@@ -10,41 +10,28 @@ function registerCommands(bot) {
   /**
    * Handle /start command (private chat)
    */
+  console.log("RegisterCommands initialized");
+
   bot.onText(/\/start/, async (msg) => {
-    // Only respond in private chats
-    if (msg.chat.type !== 'private') return;
-    
     const chatId = msg.chat.id;
     const firstName = msg.from.first_name;
     
-    // List of supported trackers
-    const supportedTrackers = [
-      'CieloTrackerPrivate',
-      'WalletTrackerBot',
-      'WhaleWatcherBot',
-      // Add more supported trackers here
-    ];
+    // Check if it's a group chat
+    if (msg.chat.type !== 'private') {
+      // Inform the user to use the command in private chat
+      bot.sendMessage(
+        chatId,
+        `Hi ${firstName}! The /start command is meant to be used in a private chat. Please message me directly @${config.telegram.botUsername} and send /start there to configure the bot properly.`
+      );
+      return;
+    }
     
-    // Create inline keyboard with tracker options
-    const keyboard = {
-      inline_keyboard: [
-        ...supportedTrackers.map(tracker => ([{
-          text: tracker,
-          callback_data: `tracker_${tracker}`
-        }])),
-        [{
-          text: 'Custom Tracker',
-          callback_data: 'tracker_custom'
-        }]
-      ]
-    };
-    
-    // Send welcome message with tracker selection
+    // Original private chat functionality
     bot.sendMessage(
       chatId,
       `👋 Hi ${firstName}! I can detect when multiple wallets buy or sell the same coin.\n\n` +
-      `Which wallet tracker would you like to monitor?`,
-      { reply_markup: keyboard }
+      `Please enter the username of your wallet tracker (with @ symbol), for example:\n` +
+      `@CieloTrackerPrivate_bot`
     );
   });
   

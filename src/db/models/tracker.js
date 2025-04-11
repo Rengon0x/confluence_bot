@@ -32,7 +32,7 @@
 
 module.exports = {
     // Collection name
-    collectionName: 'trackers',
+    collectionName: 'confluence_trackers',
     
     // Indexes to create
     indexes: [

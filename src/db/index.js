@@ -5,6 +5,7 @@ const { connectToDatabase, getDatabase } = require('./connection');
 const trackerService = require('./services/trackerService');
 const groupService = require('./services/groupService');
 const setupService = require('./services/setupService');
+const transactionService = require('./services/transactionService');
 const validators = require('./utils/validators');
 
 // Export everything
@@ -17,6 +18,7 @@ module.exports = {
   trackerService,
   groupService,
   setupService,
+  transactionService,
   
   // Utils
   validators,
@@ -58,5 +60,14 @@ module.exports = {
   // Get all active trackers
   async getAllActiveTrackers() {
     return trackerService.getAllActive();
-  }
+  },
+
+    // Transaction Service helpers
+    async storeTransaction(transaction, groupId) {
+    return transactionService.storeTransaction(transaction, groupId);
+    },
+
+    async getRecentTransactions(groupId, type, coin, windowMinutes) {
+    return transactionService.getRecentTransactions(groupId, type, coin, windowMinutes);
+    }
 };
