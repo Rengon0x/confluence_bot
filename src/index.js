@@ -27,8 +27,18 @@ async function startApp() {
 
     // Setup periodic cleanup for transactions
     setInterval(async () => {
+      // Nettoyage MongoDB - toutes les heures
       await transactionService.cleanupOldTransactions(48);
-    }, 3600000); // Check every hour
+      
+      // Nettoyage du cache - toutes les 10 minutes
+      confluenceService.cleanOldTransactions();
+      
+      // Vérifier et journaliser l'utilisation des ressources
+      const cacheStats = confluenceService.estimateCacheSize();
+      const dbStats = await transactionService.getCollectionSize();
+      
+      logger.info(`Resource usage - Cache: ${cacheStats.estimatedSizeMB.toFixed(2)}MB (${cacheStats.totalEntries} entries), MongoDB: ${dbStats ? dbStats.sizeMB.toFixed(2) + 'MB' : 'unknown'}`);
+    }, 600000); // 10 minutes
     
     logger.info('Application successfully started');
     

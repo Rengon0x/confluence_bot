@@ -21,7 +21,7 @@ const confluenceService = {
   async initialize() {
     try {
       // Load recent transactions from MongoDB
-      const transactions = await transactionService.loadRecentTransactions(config.confluence.windowMinutes);
+      const transactions = await transactionService.loadRecentTransactions(60);
       
       // Populate the cache
       for (const [key, txList] of Object.entries(transactions)) {
@@ -168,6 +168,31 @@ const confluenceService = {
     // This could be extended to get group-specific settings from the database
     return config.confluence.minWallets;
   },
+
+
+  /**
+   * Estimate the used cache size
+   */
+  estimateCacheSize() {
+    const keys = this.transactionsCache.keys();
+    let totalEntries = 0;
+    let estimatedSizeBytes = 0;
+    
+    for (const key of keys) {
+      const transactions = this.transactionsCache.get(key) || [];
+      totalEntries += transactions.length;
+      
+      // Estimation grossière: chaque transaction pèse environ 500 octets
+      estimatedSizeBytes += transactions.length * 500;
+    }
+    
+    const estimatedSizeMB = estimatedSizeBytes / (1024 * 1024);
+    return {
+      keys: keys.length,
+      totalEntries,
+      estimatedSizeMB
+    };
+  },
   
   /**
    * Clean transactions that are too old
@@ -203,6 +228,35 @@ const confluenceService = {
           this.transactionsCache.del(key);
           logger.debug(`Removed empty key ${key} from cache`);
         }
+      }
+
+      // Check the total size and clean if necessary
+      const cacheStats = this.estimateCacheSize();
+      
+      if (cacheStats.estimatedSizeMB > 100) {
+        logger.warn(`Cache size exceeds threshold (${cacheStats.estimatedSizeMB.toFixed(2)}MB), performing additional cleanup`);
+        
+        // Sort the tx by date
+        const sortedKeys = [...keys].sort((a, b) => {
+          const txA = this.transactionsCache.get(a);
+          const txB = this.transactionsCache.get(b);
+          
+          if (!txA || txA.length === 0) return 1;
+          if (!txB || txB.length === 0) return -1;
+          
+          const latestA = Math.max(...txA.map(tx => new Date(tx.timestamp).getTime()));
+          const latestB = Math.max(...txB.map(tx => new Date(tx.timestamp).getTime()));
+          
+          return latestB - latestA; 
+        });
+        
+        // Delete the 30% oldest txs
+        const keysToRemove = sortedKeys.slice(Math.floor(sortedKeys.length * 0.7));
+        for (const key of keysToRemove) {
+          this.transactionsCache.del(key);
+        }
+        
+        logger.info(`Emergency cleanup completed: removed ${keysToRemove.length} transaction groups`);
       }
       
       if (totalRemoved > 0) {
