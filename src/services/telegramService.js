@@ -1,5 +1,5 @@
+// src/services/telegramService.js
 const logger = require('../utils/logger');
-const config = require('../config/config');
 
 /**
  * Service to handle Telegram interactions
@@ -12,60 +12,43 @@ const telegramMessageService = {
    */
   formatConfluenceMessage(confluence) {
     try {
-      const emoji = confluence.type === 'buy' ? '🟢 BUY' : '🔴 SELL';
-      const action = confluence.type === 'buy' ? 'bought' : 'sold';
+      const emoji = confluence.type === 'buy' ? '🟢' : '🔴';
+      const isUpdate = confluence.isUpdate ? 'UPDATED' : 'DETECTED';
       
-      let message = `<b>${emoji} CONFLUENCE DETECTED</b>\n\n`;
-      message += `<b>${confluence.count}</b> wallets ${action} <b>${confluence.coin}</b> `;
-      if (confluence.coinAddress) {
-        message += `(ID: ${confluence.coinAddress.substring(0, 8)}...) `;
-      }
-      message += `in the last ${config.confluence.windowMinutes} minutes\n\n`;
+      let message = `${emoji} CONFLUENCE ${isUpdate} FOR $${confluence.coin}\n\n`;
+      message += `Wallet details:\n`;
       
-      if (confluence.totalAmount) {
-        message += `<b>Total amount:</b> ${confluence.totalAmount.toLocaleString()} ${confluence.coin}\n`;
-      }
+      // Use wallets in their order of appearance
+      const wallets = confluence.wallets;
       
-      if (confluence.totalUsdValue) {
-        message += `<b>Total value:</b> ${confluence.totalUsdValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}\n`;
-      }
-      
-      if (confluence.avgMarketCap > 0) {
-        let formattedMC = confluence.avgMarketCap;
+      wallets.forEach((wallet) => {
+        // Determine if this wallet line was updated
+        const updateEmoji = wallet.isUpdated ? '🔄 ' : '';
+        
+        // Determine emoji based on transaction type
+        const walletEmoji = wallet.type === 'buy' ? '🟢' : '🔴';
+        
+        // Format marketCap
+        let formattedMC = wallet.marketCap;
         if (formattedMC >= 1000000000) {
-          formattedMC = `${(formattedMC / 1000000000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}B`;
+          formattedMC = `${(formattedMC / 1000000000).toFixed(1)}B`;
         } else if (formattedMC >= 1000000) {
-          formattedMC = `${(formattedMC / 1000000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}M`;
+          formattedMC = `${(formattedMC / 1000000).toFixed(1)}M`;
         } else if (formattedMC >= 1000) {
-          formattedMC = `${(formattedMC / 1000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}K`;
+          formattedMC = `${(formattedMC / 1000).toFixed(1)}k`;
         } else {
-          formattedMC = `${formattedMC.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        }
-        message += `<b>Market Cap:</b> ${formattedMC}\n\n`;
-      } else {
-        message += '\n';
-      }
-      
-      message += `<b>Wallet details:</b>\n`;
-      
-      // Sort wallets by descending amount
-      const sortedWallets = [...confluence.wallets].sort((a, b) => (b.usdValue || 0) - (a.usdValue || 0));
-      
-      sortedWallets.forEach((wallet, index) => {
-        message += `${index + 1}. <code>${wallet.walletName}</code>: `;
-        
-        if (wallet.amount) {
-          const formattedAmount = wallet.amount >= 10000 
-            ? wallet.amount.toLocaleString(undefined, {maximumFractionDigits: 0})
-            : wallet.amount.toLocaleString(undefined, {maximumFractionDigits: 2});
-          message += `${formattedAmount} ${confluence.coin}`;
+          formattedMC = `${formattedMC.toFixed(2)}`;
         }
         
-        if (wallet.usdValue) {
-          message += ` (${wallet.usdValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})})`;
-        }
+        // Format base amount (SOL/ETH)
+        const baseAmount = wallet.baseAmount !== undefined ? 
+          wallet.baseAmount.toFixed(2) : 
+          "0.00";
+          
+        // Get base symbol, default to SOL if not specified
+        const baseSymbol = wallet.baseSymbol || "SOL";
         
-        message += '\n';
+        message += `${updateEmoji}${walletEmoji} ${wallet.walletName}: ${baseAmount}${baseSymbol}@${formattedMC} mcap\n`;
       });
       
       return message;

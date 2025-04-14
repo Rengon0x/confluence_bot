@@ -117,13 +117,10 @@ const confluenceService = {
       // Filter keys for this group
       const groupKeys = keys.filter(key => key.startsWith(`${groupId}_`));
       
-      // Debug log for monitoring
-      logger.debug(`Checking confluences for group ${groupId}, found ${groupKeys.length} keys`);
-      
       for (const key of groupKeys) {
-        // Extract info from key (format has changed)
+        // Extract info from key
         const parts = key.split('_');
-        const type = parts[1]; // buy or sell
+        const type = parts[1]; // buy ou sell
         let coin, coinAddress;
         
         if (parts[2] === 'addr') {
@@ -140,67 +137,141 @@ const confluenceService = {
           coin = transactions[0].coin;
         }
         
-        logger.debug(`Checking key: ${key}, found ${transactions.length} transactions, coin: ${coin}`);
+        // Get existing confluence if any
+        const confluenceKey = `${groupId}_${type}_${coinAddress || coin}`;
+        const existingConfluence = this.detectedConfluences.get(confluenceKey) || { wallets: [] };
         
-        // Group by wallet
+        // Group transactions by wallet
         const walletMap = new Map();
-        for (const tx of transactions) {
+        
+        // First, process existing wallets to maintain their order
+        existingConfluence.wallets.forEach(wallet => {
+          walletMap.set(wallet.walletName, {
+            ...wallet,
+            amount: 0,
+            usdValue: 0,
+            baseAmount: 0,
+            marketCap: 0,
+            transactions: [],
+            isUpdated: false,
+            type: wallet.type // Preserve original type
+          });
+        });
+        
+        // Sort transactions by timestamp to process them in order
+        const sortedTransactions = [...transactions].sort((a, b) => 
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        
+        // Process all transactions
+        for (const tx of sortedTransactions) {
           if (!walletMap.has(tx.walletName)) {
+            // New wallet - not seen before
             walletMap.set(tx.walletName, {
               walletName: tx.walletName,
               amount: tx.amount,
-              usdValue: tx.usdValue,
+              usdValue: tx.usdValue || 0,
               timestamp: tx.timestamp,
-              marketCap: tx.marketCap || 0
+              marketCap: tx.marketCap || 0,
+              baseAmount: tx.baseAmount || 0,
+              baseSymbol: tx.baseSymbol || '',
+              type: tx.type,
+              transactions: [tx],
+              isUpdated: existingConfluence.wallets.length > 0 // Mark as updated if it's a new wallet in an existing confluence
             });
+          } else {
+            // Existing wallet - update its data
+            const wallet = walletMap.get(tx.walletName);
+            wallet.transactions.push(tx);
+            
+            // Accumulate values
+            wallet.amount += tx.amount;
+            wallet.usdValue += tx.usdValue || 0;
+            wallet.baseAmount += tx.baseAmount || 0;
+            
+            // Calculate weighted average market cap based on baseAmount
+            if (tx.marketCap > 0 && tx.baseAmount > 0) {
+              wallet.marketCap = 
+                ((wallet.marketCap * (wallet.baseAmount - tx.baseAmount)) + 
+                 (tx.marketCap * tx.baseAmount)) / wallet.baseAmount;
+            }
+            
+            // Update the transaction type to the latest
+            wallet.type = tx.type;
+            
+            // Mark as updated if the type changed or new transactions added
+            const previousWallet = existingConfluence.wallets.find(w => w.walletName === wallet.walletName);
+            if (previousWallet && (previousWallet.type !== wallet.type || 
+                previousWallet.baseAmount !== wallet.baseAmount)) {
+              wallet.isUpdated = true;
+            }
           }
         }
         
+        // Convert the wallet map to an array, preserving order of appearance
+        let wallets = [];
+        
+        // First add existing wallets in their original order
+        existingConfluence.wallets.forEach(existingWallet => {
+          const updatedWallet = walletMap.get(existingWallet.walletName);
+          if (updatedWallet && updatedWallet.transactions.length > 0) {
+            wallets.push(updatedWallet);
+          }
+        });
+        
+        // Then add new wallets in order of their first transaction
+        const newWalletNames = [...walletMap.keys()].filter(
+          name => !existingConfluence.wallets.some(w => w.walletName === name)
+        );
+        
+        const newWallets = newWalletNames.map(name => walletMap.get(name))
+          .filter(wallet => wallet.transactions.length > 0)
+          .sort((a, b) => {
+            const aFirstTx = a.transactions.reduce((earliest, tx) => 
+              new Date(tx.timestamp) < new Date(earliest.timestamp) ? tx : earliest, a.transactions[0]);
+            const bFirstTx = b.transactions.reduce((earliest, tx) => 
+              new Date(tx.timestamp) < new Date(earliest.timestamp) ? tx : earliest, b.transactions[0]);
+            return new Date(aFirstTx.timestamp).getTime() - new Date(bFirstTx.timestamp).getTime();
+          });
+        
+        wallets = [...wallets, ...newWallets];
+        
         // Check if enough different wallets made a transaction
-        const wallets = [...walletMap.values()];
         const minWallets = this.getMinWalletsForGroup(groupId);
         
-        logger.debug(`Group ${groupId}, key ${key}: found ${wallets.length} unique wallets, minimum required: ${minWallets}`);
-        
         if (wallets.length >= minWallets) {
-          // Calculate a unique key for this confluence
-          const walletNames = wallets.map(w => w.walletName).sort().join('_');
-          const confluenceKey = `${groupId}_${type}_${coinAddress || coin}_${walletNames}`;
+          const isUpdate = existingConfluence.wallets.length > 0;
           
-          // Check if this confluence has already been detected recently
-          if (!this.detectedConfluences.has(confluenceKey)) {
-            // Mark this confluence as detected
-            this.detectedConfluences.set(confluenceKey, true);
-            
-            // Calculate average market cap from all transactions that have it
-            let totalMarketCap = 0;
-            let marketCapCount = 0;
-            
-            wallets.forEach(wallet => {
-              if (wallet.marketCap > 0) {
-                totalMarketCap += wallet.marketCap;
-                marketCapCount++;
-              }
-            });
-            
-            const avgMarketCap = marketCapCount > 0 ? totalMarketCap / marketCapCount : 0;
-            
-            // Create the confluence object
-            const confluence = {
-              type,
-              coin,
-              coinAddress,
-              wallets,
-              count: wallets.length,
-              totalAmount: wallets.reduce((sum, w) => sum + w.amount, 0),
-              totalUsdValue: wallets.reduce((sum, w) => sum + (w.usdValue || 0), 0),
-              avgMarketCap,
-              timestamp: new Date(),
-              groupId // Add groupId for reference
-            };
-            
+          // Create the confluence object
+          const confluence = {
+            type,
+            coin,
+            coinAddress,
+            wallets,
+            count: wallets.length,
+            totalAmount: wallets.reduce((sum, w) => sum + w.amount, 0),
+            totalUsdValue: wallets.reduce((sum, w) => sum + (w.usdValue || 0), 0),
+            totalBaseAmount: wallets.reduce((sum, w) => sum + (w.baseAmount || 0), 0),
+            avgMarketCap: wallets.reduce((sum, w) => sum + w.marketCap, 0) / wallets.length,
+            timestamp: new Date(),
+            groupId,
+            isUpdate
+          };
+          
+          // Save this confluence for future reference
+          this.detectedConfluences.set(confluenceKey, confluence);
+          
+          // Only send updates if something has changed
+          if (isUpdate) {
+            // Only add to results if at least one wallet was updated
+            if (wallets.some(w => w.isUpdated)) {
+              confluences.push(confluence);
+              logger.info(`Confluence update detected for group ${groupId}: ${confluence.count} wallets for ${coin} (${coinAddress || 'no address'})`);
+            }
+          } else {
+            // New confluence
             confluences.push(confluence);
-            logger.info(`Confluence detected for group ${groupId}: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin} (${coinAddress || 'no address'})`);
+            logger.info(`New confluence detected for group ${groupId}: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin} (${coinAddress || 'no address'})`);
           }
         }
       }

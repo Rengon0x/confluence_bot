@@ -12,16 +12,20 @@ class Transaction {
    * @param {number} usdValue - USD value of the transaction (optional)
    * @param {Date} timestamp - Transaction date and time
    * @param {number} marketCap - Market cap of the token (optional)
+   * @param {number} baseAmount - Amount of base token (SOL/ETH) used (optional)
+   * @param {string} baseSymbol - Symbol of base token (SOL/ETH) (optional)
    */
-  constructor(walletName, type, coin, coinAddress, amount, usdValue, timestamp, marketCap = 0) {
+  constructor(walletName, type, coin, coinAddress, amount, usdValue, timestamp, marketCap = 0, baseAmount = 0, baseSymbol = '') {
     this.walletName = walletName;
     this.type = type.toLowerCase(); // 'buy' or 'sell'
     this.coin = coin.toUpperCase();
-    this.coinAddress = coinAddress || ''; // Nouveau champ pour l'adresse du token
+    this.coinAddress = coinAddress || ''; // Token address field
     this.amount = amount;
     this.usdValue = usdValue;
     this.timestamp = timestamp || new Date();
     this.marketCap = marketCap;
+    this.baseAmount = baseAmount; // Amount of SOL/ETH
+    this.baseSymbol = baseSymbol; // SOL or ETH
   }
 
   /**
