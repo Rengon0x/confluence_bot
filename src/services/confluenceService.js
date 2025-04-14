@@ -68,7 +68,7 @@ const confluenceService = {
    */
   async addTransaction(transaction, groupId = 'default') {
     try {
-      // Créer une clé composite basée sur le groupe, le type et soit l'adresse du token, soit son nom
+      // Create a composite key based on group, type, and either token address or name
       let key;
       if (transaction.coinAddress && transaction.coinAddress.length > 0) {
         key = `${groupId}_${transaction.type}_addr_${transaction.coinAddress}`;
@@ -82,7 +82,7 @@ const confluenceService = {
       // Then update the cache
       let transactions = this.transactionsCache.get(key) || [];
       
-      // Add the new transaction
+      // Add the new transaction with all required fields
       transactions.push({
         walletName: transaction.walletName,
         coin: transaction.coin,
@@ -90,13 +90,16 @@ const confluenceService = {
         amount: transaction.amount,
         usdValue: transaction.usdValue,
         timestamp: transaction.timestamp,
-        marketCap: transaction.marketCap || 0
+        marketCap: transaction.marketCap || 0,
+        baseAmount: transaction.baseAmount || 0,
+        baseSymbol: transaction.baseSymbol || '',
+        type: transaction.type  // Ensure we're storing the transaction type
       });
       
       // Save to cache
       this.transactionsCache.set(key, transactions);
       
-      logger.debug(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin} by ${transaction.walletName}`);
+      logger.debug(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin} by ${transaction.walletName}, base amount: ${transaction.baseAmount} ${transaction.baseSymbol}`);
       return true;
     } catch (error) {
       logger.error('Error adding transaction:', error);
@@ -104,7 +107,7 @@ const confluenceService = {
     }
   },
   
-  /**
+    /**
    * Check for confluences
    * @param {string} groupId - Group ID
    * @returns {Array} - List of detected confluences
@@ -117,10 +120,13 @@ const confluenceService = {
       // Filter keys for this group
       const groupKeys = keys.filter(key => key.startsWith(`${groupId}_`));
       
+      // Debug log for monitoring
+      logger.debug(`Checking confluences for group ${groupId}, found ${groupKeys.length} keys`);
+      
       for (const key of groupKeys) {
         // Extract info from key
         const parts = key.split('_');
-        const type = parts[1]; // buy ou sell
+        const type = parts[1]; // buy or sell
         let coin, coinAddress;
         
         if (parts[2] === 'addr') {
@@ -136,6 +142,8 @@ const confluenceService = {
         if (!coin && coinAddress && transactions.length > 0) {
           coin = transactions[0].coin;
         }
+        
+        logger.debug(`Checking key: ${key}, found ${transactions.length} transactions, coin: ${coin}`);
         
         // Get existing confluence if any
         const confluenceKey = `${groupId}_${type}_${coinAddress || coin}`;
@@ -191,9 +199,17 @@ const confluenceService = {
             
             // Calculate weighted average market cap based on baseAmount
             if (tx.marketCap > 0 && tx.baseAmount > 0) {
-              wallet.marketCap = 
-                ((wallet.marketCap * (wallet.baseAmount - tx.baseAmount)) + 
-                 (tx.marketCap * tx.baseAmount)) / wallet.baseAmount;
+              const oldWeight = wallet.baseAmount - tx.baseAmount;
+              const newWeight = tx.baseAmount;
+              const totalWeight = wallet.baseAmount;
+              
+              if (totalWeight > 0) {
+                wallet.marketCap = 
+                  ((wallet.marketCap * oldWeight) + 
+                  (tx.marketCap * newWeight)) / totalWeight;
+              } else {
+                wallet.marketCap = tx.marketCap;
+              }
             }
             
             // Update the transaction type to the latest
@@ -239,6 +255,8 @@ const confluenceService = {
         // Check if enough different wallets made a transaction
         const minWallets = this.getMinWalletsForGroup(groupId);
         
+        logger.debug(`Group ${groupId}, key ${key}: found ${wallets.length} unique wallets, minimum required: ${minWallets}`);
+        
         if (wallets.length >= minWallets) {
           const isUpdate = existingConfluence.wallets.length > 0;
           
@@ -252,7 +270,7 @@ const confluenceService = {
             totalAmount: wallets.reduce((sum, w) => sum + w.amount, 0),
             totalUsdValue: wallets.reduce((sum, w) => sum + (w.usdValue || 0), 0),
             totalBaseAmount: wallets.reduce((sum, w) => sum + (w.baseAmount || 0), 0),
-            avgMarketCap: wallets.reduce((sum, w) => sum + w.marketCap, 0) / wallets.length,
+            avgMarketCap: wallets.reduce((sum, w) => sum + (w.marketCap || 0), 0) / wallets.length,
             timestamp: new Date(),
             groupId,
             isUpdate
@@ -271,7 +289,7 @@ const confluenceService = {
           } else {
             // New confluence
             confluences.push(confluence);
-            logger.info(`New confluence detected for group ${groupId}: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin} (${coinAddress || 'no address'})`);
+            logger.info(`Confluence detected for group ${groupId}: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin} (${coinAddress || 'no address'})`);
           }
         }
       }
@@ -282,7 +300,7 @@ const confluenceService = {
       return [];
     }
   },
-  
+    
   /**
    * Get minimum wallets setting for a group
    * @param {string} groupId - Group ID

@@ -25,7 +25,7 @@ const telegramMessageService = {
         // Determine if this wallet line was updated
         const updateEmoji = wallet.isUpdated ? '🔄 ' : '';
         
-        // Determine emoji based on transaction type
+        // Use the wallet's transaction type for the emoji (buy or sell)
         const walletEmoji = wallet.type === 'buy' ? '🟢' : '🔴';
         
         // Format marketCap
@@ -40,15 +40,18 @@ const telegramMessageService = {
           formattedMC = `${formattedMC.toFixed(2)}`;
         }
         
+        // Get the wallet name without the # prefix if it exists
+        const displayName = wallet.walletName.replace(/^#/, '');
+        
         // Format base amount (SOL/ETH)
-        const baseAmount = wallet.baseAmount !== undefined ? 
+        const baseAmount = wallet.baseAmount !== undefined && wallet.baseAmount > 0 ? 
           wallet.baseAmount.toFixed(2) : 
           "0.00";
           
         // Get base symbol, default to SOL if not specified
         const baseSymbol = wallet.baseSymbol || "SOL";
         
-        message += `${updateEmoji}${walletEmoji} ${wallet.walletName}: ${baseAmount}${baseSymbol}@${formattedMC} mcap\n`;
+        message += `${updateEmoji}${walletEmoji} ${displayName}: ${baseAmount}${baseSymbol}@${formattedMC} mcap\n`;
       });
       
       return message;
