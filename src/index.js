@@ -3,6 +3,8 @@ const logger = require('./utils/logger');
 const db = require('./db');
 const { startBot } = require('./bot');
 const { startForwarder } = require('./forwarder');
+const confluenceService = require('./services/confluenceService'); 
+const transactionService = require('./db/services/transactionService');
 
 /**
  * Main application entry point

@@ -38,7 +38,7 @@ async function processMessage(trackerName, message) {
     for (const group of groups) {
       try {
         // Add the transaction to the confluence detection service with group ID
-        confluenceService.addTransaction(transaction, group.id);
+        await confluenceService.addTransaction(transaction, group.id);
         
         // Check for confluences for this group
         const confluences = confluenceService.checkConfluences(group.id);

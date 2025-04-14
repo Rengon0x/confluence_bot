@@ -27,10 +27,10 @@ const transactionService = {
       const collection = await this.getCollection();
       
       const transactionDoc = {
-        walletAddress: transaction.walletAddress,
         walletName: transaction.walletName,
         type: transaction.type,
         coin: transaction.coin,
+        coinAddress: transaction.coinAddress || '',
         amount: transaction.amount,
         usdValue: transaction.usdValue || 0,
         marketCap: transaction.marketCap || 0,
@@ -56,18 +56,26 @@ const transactionService = {
    * @param {number} windowMinutes - How far back to look in minutes
    * @returns {Promise<Array>} Recent transactions
    */
-  async getRecentTransactions(groupId, type, coin, windowMinutes = 60) {
+  
+async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60) {
     try {
       const collection = await this.getCollection();
       
       const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
       
-      const transactions = await collection.find({
+      const query = {
         groupId: groupId,
         type: type,
-        coin: coin,
         timestamp: { $gte: cutoffTime }
-      }).toArray();
+      };
+      
+      if (coinAddress && coinAddress.length > 0) {
+        query.coinAddress = coinAddress;
+      } else if (coin) {
+        query.coin = coin;
+      }
+      
+      const transactions = await collection.find(query).toArray();
       
       return transactions;
     } catch (error) {
@@ -91,21 +99,12 @@ const transactionService = {
         timestamp: { $gte: cutoffTime }
       }).toArray();
       
-      // Group transactions by groupId_type_coin
-      const transactionMap = {};
-      for (const tx of transactions) {
-        const key = `${tx.groupId}_${tx.type}_${tx.coin}`;
-        if (!transactionMap[key]) {
-          transactionMap[key] = [];
-        }
-        transactionMap[key].push(tx);
-      }
+      logger.info(`Loaded ${transactions.length} recent transactions from MongoDB (window: ${windowMinutes} min)`);
       
-      logger.info(`Loaded ${transactions.length} recent transactions from MongoDB`);
-      return transactionMap;
+      return transactions;
     } catch (error) {
       logger.error(`Error in transactionService.loadRecentTransactions: ${error.message}`);
-      return {};
+      return [];
     }
   },
 
@@ -152,27 +151,27 @@ const transactionService = {
         const collectionSize = await this.getCollectionSize();
         
         if (collectionSize && collectionSize.sizeMB > 250) { 
-            logger.warn(`MongoDB collection size exceeds threshold (${collectionSize.sizeMB.toFixed(2)}MB), performing additional cleanup`);
+        logger.warn(`MongoDB collection size exceeds threshold (${collectionSize.sizeMB.toFixed(2)}MB), performing additional cleanup`);
+        
+        const excessCount = Math.floor(collectionSize.count * 0.3); 
+        
+        if (excessCount > 0) {
+            const oldestTransactions = await collection.find({})
+            .sort({ timestamp: 1 })
+            .limit(excessCount)
+            .toArray();
             
-            const excessCount = Math.floor(collectionSize.count * 0.3); 
+            if (oldestTransactions.length > 0) {
+            const oldestIds = oldestTransactions.map(tx => tx._id);
             
-            if (excessCount > 0) {
-                const oldestTransactions = await collection.find({})
-                .sort({ timestamp: 1 })
-                .limit(excessCount)
-                .toArray();
-                
-                if (oldestTransactions.length > 0) {
-                const oldestIds = oldestTransactions.map(tx => tx._id);
-                
-                const deleteResult = await collection.deleteMany({
-                    _id: { $in: oldestIds }
-                });
-                
-                logger.info(`Emergency cleanup completed: removed ${deleteResult.deletedCount} oldest transactions`);
-                }
+            const deleteResult = await collection.deleteMany({
+                _id: { $in: oldestIds }
+            });
+            
+            logger.info(`Emergency cleanup completed: removed ${deleteResult.deletedCount} oldest transactions`);
             }
         }
+      }
     } catch (error) {
       logger.error(`Error in transactionService.cleanupOldTransactions: ${error.message}`);
     }

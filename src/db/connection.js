@@ -5,6 +5,7 @@ const config = require('../config/config');
 // Import models to get their indexes
 const TrackerModel = require('./models/tracker');
 const GroupModel = require('./models/group');
+const TransactionModel = require('./models/transaction');
 
 let mongoClient = null;
 let db = null;
@@ -75,10 +76,7 @@ async function setupIndexes(database) {
         if (TrackerModel.indexes) {
             const trackerCollection = database.collection(TrackerModel.collectionName || 'trackers');
             for (const index of TrackerModel.indexes) {
-                await trackerCollection.createIndex(index.key, { 
-                    unique: index.unique || false,
-                    background: true 
-                });
+                await createOrUpdateIndex(trackerCollection, index);
             }
         }
         
@@ -86,10 +84,7 @@ async function setupIndexes(database) {
         if (GroupModel.indexes) {
             const groupCollection = database.collection(GroupModel.collectionName || 'groups');
             for (const index of GroupModel.indexes) {
-                await groupCollection.createIndex(index.key, { 
-                    unique: index.unique || false,
-                    background: true 
-                });
+                await createOrUpdateIndex(groupCollection, index);
             }
         }
 
@@ -97,18 +92,52 @@ async function setupIndexes(database) {
         if (TransactionModel.indexes) {
             const transactionCollection = database.collection(TransactionModel.collectionName);
             for (const index of TransactionModel.indexes) {
-                await transactionCollection.createIndex(index.key, { 
-                    unique: index.unique || false,
-                    background: true,
-                    // Ajouter l'expiration si c'est un index TTL
-                    ...(index.expireAfterSeconds && { expireAfterSeconds: index.expireAfterSeconds })
-                });
+                await createOrUpdateIndex(transactionCollection, index);
             }
         }
         
         logger.info("MongoDB indexes created successfully");
     } catch (error) {
         logger.error("Error creating MongoDB indexes:", error);
+    }
+}
+
+
+// Helper function to create or update an index
+async function createOrUpdateIndex(collection, indexSpec) {
+    try {
+        // Try to create the index normally
+        await collection.createIndex(indexSpec.key, { 
+            unique: indexSpec.unique || false,
+            background: true,
+            ...(indexSpec.expireAfterSeconds && { expireAfterSeconds: indexSpec.expireAfterSeconds })
+        });
+    } catch (error) {
+        // If the error indicates an existing index with the same name but different options
+        if (error.message && error.message.includes("existing index")) {
+            try {
+                // Get the index name
+                const indexName = Object.keys(indexSpec.key).map(k => `${k}_1`).join('_');
+                
+                // Drop the existing index
+                logger.info(`Dropping existing index ${indexName} to recreate with new options`);
+                await collection.dropIndex(indexName);
+                
+                // Retry creating the index
+                await collection.createIndex(indexSpec.key, { 
+                    unique: indexSpec.unique || false,
+                    background: true,
+                    ...(indexSpec.expireAfterSeconds && { expireAfterSeconds: indexSpec.expireAfterSeconds })
+                });
+                
+                logger.info(`Successfully recreated index ${indexName} with new options`);
+            } catch (dropError) {
+                logger.error(`Error dropping and recreating index: ${dropError.message}`);
+                throw dropError;
+            }
+        } else {
+            throw error;
+        }
     }
 }
 

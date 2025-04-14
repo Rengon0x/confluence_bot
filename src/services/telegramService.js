@@ -17,6 +17,9 @@ const telegramMessageService = {
       
       let message = `<b>${emoji} CONFLUENCE DETECTED</b>\n\n`;
       message += `<b>${confluence.count}</b> wallets ${action} <b>${confluence.coin}</b> `;
+      if (confluence.coinAddress) {
+        message += `(ID: ${confluence.coinAddress.substring(0, 8)}...) `;
+      }
       message += `in the last ${config.confluence.windowMinutes} minutes\n\n`;
       
       if (confluence.totalAmount) {
