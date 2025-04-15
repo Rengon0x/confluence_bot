@@ -20,8 +20,15 @@ const simulateCommand = {
       // Track if confluence is detected
       let confluenceDetected = false;
       
-      // Create a fictional token ID
+      // Create a fictional token ID that's consistent for the same token name
       const coinAddress = `SIM${Date.now().toString(36).slice(-6)}`;
+      
+      // Inform about the simulation starting
+      bot.sendMessage(
+        chatId,
+        `🧪 <b>Starting simulation with ${walletCount} wallets for token ${coinName} (address: ${coinAddress})</b>`,
+        { parse_mode: 'HTML' }
+      );
       
       // Generate transactions for multiple wallets
       for (let i = 1; i <= walletCount; i++) {
@@ -56,11 +63,11 @@ const simulateCommand = {
         // Log the simulation
         logger.info(`Simulated transaction: ${walletName} bought ${transaction.amount} ${coinName} with ${baseAmount} ${baseSymbol}`);
         
-        // Create a mock message that closely resembles real messages
+        // Create a mock message with proper Chart URL including the token address
         const mockMessage = 
           `${walletName}\n` +
           `⭐️ 🟢 Swapped ${baseAmount} #${baseSymbol} ($${usdValue}) for ${amount.toLocaleString('en-US', {maximumFractionDigits: 2})} #${coinName} On #PumpSwap @ $${price} | MC: $${formatMarketCap(marketCap)}\n` +
-          `#solana | Cielo | ViewTx | Chart\n` +
+          `#solana | Cielo | ViewTx | Chart (https://photon-sol.tinyastro.io/en/r/@cielosol/${coinAddress}pump)\n` +
           `🐴 Buy on Trojan`;
         
         // Send the mock message to the chat
@@ -92,7 +99,6 @@ const simulateCommand = {
         );
         
         // Dump transactions for debugging
-        confluenceService.findTransactionsForToken(coinName);
         confluenceService.findTransactionsForToken(coinAddress);
       }
       

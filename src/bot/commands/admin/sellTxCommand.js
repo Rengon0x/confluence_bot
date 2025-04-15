@@ -25,12 +25,61 @@ const sellTxCommand = {
       const marketCap = Math.floor(Math.random() * 200000) + 10000; // Random MarketCap
       const price = (usdValue / amount).toFixed(8); // Calculate price per token
       
-      // Create a transaction object
+      // Find existing transactions for this token to get its address and maintain same key
+      let foundCoinAddress = '';
+      let existingTransactionType = 'sell'; // Default to sell if no match found
+      
+      // Search through the cache keys more effectively
+      const cacheKeys = confluenceService.transactionsCache.keys();
+      logger.debug(`Searching for token ${coinName} among ${cacheKeys.length} keys`);
+      
+      // First pass - search for exact matches in transaction data
+      for (const key of cacheKeys) {
+        // Filter only keys from this chat group
+        if (key.startsWith(`${chatId.toString()}_`)) {
+          const transactions = confluenceService.transactionsCache.get(key) || [];
+          
+          // Look for matching transactions
+          for (const tx of transactions) {
+            if (tx.coin === coinName) {
+              logger.debug(`Found match for ${coinName} in key ${key}`);
+              foundCoinAddress = tx.coinAddress || '';
+              existingTransactionType = key.split('_')[1]; // Extract type from key (buy/sell)
+              logger.debug(`Using existing type: ${existingTransactionType}, coin address: ${foundCoinAddress}`);
+              break;
+            }
+          }
+          
+          if (foundCoinAddress) break; // Stop searching if found
+        }
+      }
+      
+      // If still not found, try a broader search
+      if (!foundCoinAddress) {
+        for (const key of cacheKeys) {
+          // Only look in this group's keys
+          if (key.startsWith(`${chatId.toString()}_`)) {
+            // Check if the key itself contains the token name
+            if (key.includes(coinName)) {
+              logger.debug(`Found potential match in key name: ${key}`);
+              const transactions = confluenceService.transactionsCache.get(key) || [];
+              if (transactions.length > 0) {
+                foundCoinAddress = transactions[0].coinAddress || '';
+                existingTransactionType = key.split('_')[1]; // Extract type from key (buy/sell)
+                logger.debug(`Using broader match type: ${existingTransactionType}, coin address: ${foundCoinAddress}`);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // Create a transaction object - always use 'sell' type for sell command
       const transaction = new Transaction(
-        `#${walletName}`, // Add # prefix to match format
-        'sell', // This is a sell transaction
+        `#${walletName}`,
+        'sell', // This must be a sell transaction regardless of existing type
         coinName,
-        '', // coinAddress will be filled if there's a match
+        foundCoinAddress,
         amount,
         parseFloat(usdValue),
         new Date(),
@@ -39,21 +88,7 @@ const sellTxCommand = {
         baseSymbol
       );
       
-      // Find existing transactions for this token to get its address
-      let foundCoinAddress = '';
-      
-      // Search through the cache keys
-      const keys = confluenceService.transactionsCache.keys();
-      for (const key of keys) {
-        if (key.includes(coinName)) {
-          const transactions = confluenceService.transactionsCache.get(key) || [];
-          if (transactions.length > 0 && transactions[0].coinAddress) {
-            foundCoinAddress = transactions[0].coinAddress;
-            transaction.coinAddress = foundCoinAddress;
-            break;
-          }
-        }
-      }
+      logger.info(`Creating sell transaction for ${walletName} ${coinName} with address: ${foundCoinAddress || 'none'}`);
       
       // Add the transaction
       await confluenceService.addTransaction(transaction, chatId.toString());
@@ -75,6 +110,9 @@ const sellTxCommand = {
           const formattedMessage = telegramService.formatConfluenceMessage(confluence);
           bot.sendMessage(chatId, formattedMessage, { parse_mode: 'HTML' });
         }
+      } else {
+        logger.warn(`No confluences detected after adding transaction for ${coinName}`);
+        confluenceService.findTransactionsForToken(coinName);
       }
       
     } catch (error) {

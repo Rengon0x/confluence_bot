@@ -91,7 +91,7 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
  * @param {number} windowMinutes - How far back to look in minutes
  * @returns {Promise<Object>} Map of transactions by key (groupId_type_coin)
  */
-async loadRecentTransactions(windowMinutes = 60) {
+ async loadRecentTransactions(windowMinutes = 60) {
     try {
       const collection = await this.getCollection();
       
@@ -103,21 +103,31 @@ async loadRecentTransactions(windowMinutes = 60) {
       
       logger.info(`Loaded ${transactions.length} recent transactions from MongoDB (window: ${windowMinutes} min)`);
       
-      // Make sure we properly process transaction types and base amounts
+      // Ensure all required fields are present and valid
       transactions.forEach(tx => {
         // Ensure type is properly set
         if (!tx.type) {
-          // If type is missing, try to infer it
+          // If type is missing, try to infer it based on baseAmount
           tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
+          logger.debug(`Inferred type '${tx.type}' for transaction by ${tx.walletName} for ${tx.coin}`);
         }
         
-        // Ensure baseAmount and baseSymbol are set
+        // Ensure baseAmount is set
         if (tx.baseAmount === undefined) {
           tx.baseAmount = 0;
+          logger.debug(`Setting default baseAmount 0 for transaction by ${tx.walletName}`);
         }
         
+        // Ensure baseSymbol is set
         if (!tx.baseSymbol) {
           tx.baseSymbol = 'SOL';
+          logger.debug(`Setting default baseSymbol 'SOL' for transaction by ${tx.walletName}`);
+        }
+        
+        // Ensure marketCap is set
+        if (tx.marketCap === undefined) {
+          tx.marketCap = 0;
+          logger.debug(`Setting default marketCap 0 for transaction by ${tx.walletName}`);
         }
       });
       

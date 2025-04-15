@@ -52,7 +52,7 @@ const quickSimCommand = {
       
       bot.sendMessage(
         chatId,
-        `🧪 <b>Starting quick simulation with token ${coinName}</b>`,
+        `🧪 <b>Starting quick simulation with token ${coinName} (address: ${coinAddress})</b>`,
         { parse_mode: 'HTML' }
       );
       
@@ -77,7 +77,7 @@ const quickSimCommand = {
         const mockMessage = 
           `${tx.walletName}\n` +
           `⭐️ 🟢 Swapped ${tx.baseAmount} #${tx.baseSymbol} ($${tx.usdValue.toFixed(2)}) for ${tx.amount.toLocaleString('en-US', {maximumFractionDigits: 2})} #${coinName} On #PumpSwap @ $${tx.price} | MC: $${formatMarketCap(tx.marketCap)}\n` +
-          `#solana | Cielo | ViewTx | Chart\n` +
+          `#solana | Cielo | ViewTx | Chart (https://photon-sol.tinyastro.io/en/r/@cielosol/${coinAddress}pump)\n` +
           `🐴 Buy on Trojan`;
         
         // Send the mock message to the chat
@@ -104,7 +104,7 @@ const quickSimCommand = {
         );
         
         // Dump transactions for debugging
-        confluenceService.findTransactionsForToken(coinName);
+        confluenceService.findTransactionsForToken(coinAddress);
       }
       
     } catch (error) {

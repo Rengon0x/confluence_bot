@@ -30,6 +30,12 @@ const confluenceService = {
       const grouped = {};
       
       for (const tx of transactions) {
+        // Make sure type is valid
+        if (!tx.type) {
+          tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
+          logger.debug(`Setting default type ${tx.type} for transaction from wallet ${tx.walletName}`);
+        }
+        
         // Déterminer la clé de cache appropriée
         let key;
         if (tx.coinAddress && tx.coinAddress.length > 0) {
@@ -42,6 +48,7 @@ const confluenceService = {
           grouped[key] = [];
         }
         
+        // Include all important fields
         grouped[key].push({
           walletName: tx.walletName,
           coin: tx.coin,
@@ -49,7 +56,10 @@ const confluenceService = {
           amount: tx.amount,
           usdValue: tx.usdValue,
           timestamp: tx.timestamp,
-          marketCap: tx.marketCap || 0
+          marketCap: tx.marketCap || 0,
+          type: tx.type,                // Préserver le type de transaction
+          baseAmount: tx.baseAmount || 0,  // Préserver le montant de base
+          baseSymbol: tx.baseSymbol || ''  // Préserver le symbole de base
         });
       }
       
@@ -75,8 +85,10 @@ const confluenceService = {
       let key;
       if (transaction.coinAddress && transaction.coinAddress.length > 0) {
         key = `${groupId}_${transaction.type}_addr_${transaction.coinAddress}`;
+        logger.debug(`Using address-based key: ${key} for token ${transaction.coin}`);
       } else {
         key = `${groupId}_${transaction.type}_name_${transaction.coin}`;
+        logger.debug(`Using name-based key: ${key} for token ${transaction.coin}`);
       }
       
       // Store in MongoDB first
@@ -96,7 +108,7 @@ const confluenceService = {
         marketCap: transaction.marketCap || 0,
         baseAmount: transaction.baseAmount || 0,
         baseSymbol: transaction.baseSymbol || '',
-        type: transaction.type  // Ensure we're storing the transaction type
+        type: transaction.type 
       });
       
       // Save to cache
@@ -110,7 +122,7 @@ const confluenceService = {
     }
   },
   
-    /**
+  /**
    * Check for confluences
    * @param {string} groupId - Group ID
    * @returns {Array} - List of detected confluences
@@ -118,6 +130,7 @@ const confluenceService = {
   checkConfluences(groupId = 'default') {
     try {
       const confluences = [];
+      const detectedTokens = new Map(); // Map to track tokens by their address or name
       const keys = this.transactionsCache.keys();
       
       // Filter keys for this group
@@ -126,6 +139,7 @@ const confluenceService = {
       // Debug log for monitoring
       logger.debug(`Checking confluences for group ${groupId}, found ${groupKeys.length} keys`);
       
+      // First pass: identify all tokens and their information
       for (const key of groupKeys) {
         // Extract info from key
         const parts = key.split('_');
@@ -141,8 +155,8 @@ const confluenceService = {
         }
         
         const transactions = this.transactionsCache.get(key) || [];
-
-        // Skip if no transactions are newer than the bot startup time
+        
+        // Skip if no recent transactions
         const hasNewTransactions = transactions.some(tx => 
           new Date(tx.timestamp) > startupTime
         );
@@ -152,17 +166,54 @@ const confluenceService = {
           continue;
         }
         
+        // Get coin name from transactions if missing
         if (!coin && coinAddress && transactions.length > 0) {
           coin = transactions[0].coin;
         }
         
-        logger.debug(`Checking key: ${key}, found ${transactions.length} transactions, coin: ${coin}`);
+        // Create a unified token identifier (prefer address, fallback to name)
+        const tokenId = coinAddress && coinAddress.length > 0 ? coinAddress : coin;
         
-        // Get existing confluence if any
-        const confluenceKey = `${groupId}_${type}_${coinAddress || coin}`;
+        // Store token info
+        if (!detectedTokens.has(tokenId)) {
+          detectedTokens.set(tokenId, {
+            coin: coin,
+            coinAddress: coinAddress,
+            buyTransactions: [],
+            sellTransactions: [],
+            groupId: groupId
+          });
+        }
+        
+        // Add transactions to the appropriate array
+        const tokenInfo = detectedTokens.get(tokenId);
+        if (type === 'buy') {
+          tokenInfo.buyTransactions.push(...transactions);
+        } else if (type === 'sell') {
+          tokenInfo.sellTransactions.push(...transactions);
+        }
+      }
+      
+      // Second pass: process each token
+      for (const [tokenId, tokenInfo] of detectedTokens.entries()) {
+        const { coin, coinAddress, buyTransactions, sellTransactions, groupId } = tokenInfo;
+        
+        // Combine all transactions for this token
+        const allTransactions = [...buyTransactions, ...sellTransactions];
+        
+        if (allTransactions.length === 0) continue;
+        
+        logger.debug(`Processing token ${coin || coinAddress}: ${buyTransactions.length} buy txs, ${sellTransactions.length} sell txs`);
+        
+        // Generate a unique key for this token's confluence
+        const confluenceKey = coinAddress && coinAddress.length > 0 
+          ? `${groupId}_addr_${coinAddress}` // Remove transaction type from key
+          : `${groupId}_name_${coin}`;
+          
+        // Get existing confluence for this token
         const existingConfluence = this.detectedConfluences.get(confluenceKey) || { wallets: [] };
         
-        // Group transactions by wallet
+        // Process all transactions and create a wallet map
         const walletMap = new Map();
         
         // First, process existing wallets to maintain their order
@@ -179,13 +230,19 @@ const confluenceService = {
           });
         });
         
-        // Sort transactions by timestamp to process them in order
-        const sortedTransactions = [...transactions].sort((a, b) => 
+        // Sort all transactions by timestamp
+        const sortedTransactions = [...allTransactions].sort((a, b) => 
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
         );
         
         // Process all transactions
         for (const tx of sortedTransactions) {
+          // Skip transactions without a valid type
+          if (!tx.type) {
+            logger.warn(`Transaction without type for ${tx.walletName}, skipping`);
+            continue;
+          }
+          
           if (!walletMap.has(tx.walletName)) {
             // New wallet - not seen before
             walletMap.set(tx.walletName, {
@@ -201,16 +258,21 @@ const confluenceService = {
               isUpdated: existingConfluence.wallets.length > 0 // Mark as updated if it's a new wallet in an existing confluence
             });
           } else {
-            // Existing wallet - update its data
+            // Existing wallet - update its data based on transaction type
             const wallet = walletMap.get(tx.walletName);
+            
+            // Always add the transaction to the wallet's transaction history
             wallet.transactions.push(tx);
             
-            // Accumulate values
+            // Update transaction type (most recent transaction's type wins)
+            wallet.type = tx.type;
+            
+            // Update values
             wallet.amount += tx.amount;
             wallet.usdValue += tx.usdValue || 0;
             wallet.baseAmount += tx.baseAmount || 0;
             
-            // Calculate weighted average market cap based on baseAmount
+            // Update market cap calculation
             if (tx.marketCap > 0 && tx.baseAmount > 0) {
               const oldWeight = wallet.baseAmount - tx.baseAmount;
               const newWeight = tx.baseAmount;
@@ -225,9 +287,6 @@ const confluenceService = {
               }
             }
             
-            // Update the transaction type to the latest
-            wallet.type = tx.type;
-            
             // Mark as updated if the type changed or new transactions added
             const previousWallet = existingConfluence.wallets.find(w => w.walletName === wallet.walletName);
             if (previousWallet && (previousWallet.type !== wallet.type || 
@@ -237,7 +296,7 @@ const confluenceService = {
           }
         }
         
-        // Convert the wallet map to an array, preserving order of appearance
+        // Create an array of wallets from the map
         let wallets = [];
         
         // First add existing wallets in their original order
@@ -267,26 +326,35 @@ const confluenceService = {
         
         // Check if enough different wallets made a transaction
         const minWallets = this.getMinWalletsForGroup(groupId);
+        const totalUniqueWallets = wallets.length;
         
-        logger.debug(`Group ${groupId}, key ${key}: found ${wallets.length} unique wallets, minimum required: ${minWallets}`);
+        logger.debug(`Token ${coin || coinAddress}: ${totalUniqueWallets} unique wallets, minimum required: ${minWallets}`);
         
-        if (wallets.length >= minWallets) {
+        if (totalUniqueWallets >= minWallets) {
           const isUpdate = existingConfluence.wallets.length > 0;
+          
+          // Determine the primary transaction type based on most recent activity
+          // or the type with the most transactions
+          const buyWallets = wallets.filter(w => w.type === 'buy').length;
+          const sellWallets = wallets.filter(w => w.type === 'sell').length;
+          const primaryType = buyWallets >= sellWallets ? 'buy' : 'sell';
           
           // Create the confluence object
           const confluence = {
-            type,
+            type: primaryType, // Primary type for the message emoji
             coin,
             coinAddress,
             wallets,
-            count: wallets.length,
+            count: totalUniqueWallets,
             totalAmount: wallets.reduce((sum, w) => sum + w.amount, 0),
             totalUsdValue: wallets.reduce((sum, w) => sum + (w.usdValue || 0), 0),
             totalBaseAmount: wallets.reduce((sum, w) => sum + (w.baseAmount || 0), 0),
             avgMarketCap: wallets.reduce((sum, w) => sum + (w.marketCap || 0), 0) / wallets.length,
             timestamp: new Date(),
             groupId,
-            isUpdate
+            isUpdate,
+            buyCount: buyWallets,
+            sellCount: sellWallets
           };
           
           // Save this confluence for future reference
@@ -297,12 +365,12 @@ const confluenceService = {
             // Only add to results if at least one wallet was updated
             if (wallets.some(w => w.isUpdated)) {
               confluences.push(confluence);
-              logger.info(`Confluence update detected for group ${groupId}: ${confluence.count} wallets for ${coin} (${coinAddress || 'no address'})`);
+              logger.info(`Unified confluence update detected for ${coin || coinAddress}: ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)`);
             }
           } else {
             // New confluence
             confluences.push(confluence);
-            logger.info(`Confluence detected for group ${groupId}: ${confluence.count} wallets ${type === 'buy' ? 'bought' : 'sold'} ${coin} (${coinAddress || 'no address'})`);
+            logger.info(`Unified confluence detected for ${coin || coinAddress}: ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)`);
           }
         }
       }
@@ -357,7 +425,9 @@ const confluenceService = {
     let found = false;
     
     for (const key of keys) {
-      if (key.includes(tokenSymbolOrAddress)) {
+    if (key.includes(`_addr_${tokenSymbolOrAddress}`) || 
+        key.includes(`_name_${tokenSymbolOrAddress}`)) {
+
         found = true;
         const transactions = this.transactionsCache.get(key) || [];
         logger.debug(`Found in key: ${key}`);

@@ -21,12 +21,22 @@ const parserService = {
       const walletName = walletNameMatch ? walletNameMatch[1] : 'unknown';
       logger.debug('Wallet name match: ' + (walletName || 'none'));
       
-      // Extract token address from the Chart URL
+      // Extract token address from the Chart URL - improved parsing
       let coinAddress = '';
+      
+      // First try to extract from Chart parenthesis format: Chart (https://...)
       const chartUrlMatch = message.match(/Chart\s*\(.*?\/([a-zA-Z0-9]+)(?:pump)?\)/i);
-      if (chartUrlMatch) {
+      if (chartUrlMatch && chartUrlMatch[1]) {
         coinAddress = chartUrlMatch[1];
-        logger.debug('Token address match: ' + coinAddress);
+        logger.debug('Token address matched from Chart URL: ' + coinAddress);
+      } 
+      // Try alternative formats like photon-sol.tinyastro.io URLs
+      else {
+        const alternativeUrlMatch = message.match(/Chart.*io\/[^\/]+\/[^\/]+\/([A-Za-z0-9]+)(?:pump)?/i);
+        if (alternativeUrlMatch && alternativeUrlMatch[1]) {
+          coinAddress = alternativeUrlMatch[1];
+          logger.debug('Token address matched from alternative Chart URL: ' + coinAddress);
+        }
       }
       
       // Determine transaction type based on emoji
@@ -98,7 +108,7 @@ const parserService = {
             else marketCap = mcValue;
           }
           
-          logger.info(`Message type: BUY | Wallet: ${walletName} | ${baseAmount} ${baseSymbol} → ${tokenAmount} ${tokenSymbol} | MC: ${this.formatMarketCap(marketCap)}`);
+          logger.info(`Message type: BUY | Wallet: ${walletName} | ${baseAmount} ${baseSymbol} → ${tokenAmount} ${tokenSymbol} | MC: ${this.formatMarketCap(marketCap)} | Address: ${coinAddress || 'none'}`);
           
           return new Transaction(
             walletName,
@@ -162,7 +172,7 @@ const parserService = {
             else marketCap = mcValue;
           }
           
-          logger.info(`Message type: SELL | Wallet: ${walletName} | ${tokenAmount} ${tokenSymbol} → ${baseAmount} ${baseSymbol} | MC: ${this.formatMarketCap(marketCap)}`);
+          logger.info(`Message type: SELL | Wallet: ${walletName} | ${tokenAmount} ${tokenSymbol} → ${baseAmount} ${baseSymbol} | MC: ${this.formatMarketCap(marketCap)} | Address: ${coinAddress || 'none'}`);
           
           return new Transaction(
             walletName,

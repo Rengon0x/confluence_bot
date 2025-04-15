@@ -12,16 +12,36 @@ const telegramMessageService = {
    */
   formatConfluenceMessage(confluence) {
     try {
-      const emoji = confluence.type === 'buy' ? '🟢' : '🔴';
+      // The primary emoji is determined by the transaction type of the confluence
+      const primaryEmoji = confluence.type === 'buy' ? '🟢' : '🔴';
       const isUpdate = confluence.isUpdate ? 'UPDATED' : 'DETECTED';
       
-      let message = `${emoji} CONFLUENCE ${isUpdate} FOR $${confluence.coin}\n\n`;
-      message += `Wallet details:\n`;
+      let message = `${primaryEmoji} CONFLUENCE ${isUpdate} FOR $${confluence.coin}\nWallet details:\n\n`;
       
-      // Use wallets in their order of appearance
-      const wallets = confluence.wallets;
+      // Group wallets by type (buy/sell)
+      const buyWallets = confluence.wallets.filter(wallet => wallet.type === 'buy');
+      const sellWallets = confluence.wallets.filter(wallet => wallet.type === 'sell');
       
-      wallets.forEach((wallet) => {
+      // Sort wallets within each group by their first transaction timestamp
+      const sortWalletsByFirstTransaction = wallets => {
+        return wallets.sort((a, b) => {
+          // We're making the simplifying assumption that the first transaction
+          // in a wallet's transactions array is the earliest one
+          if (a.transactions && a.transactions.length > 0 && 
+              b.transactions && b.transactions.length > 0) {
+              return new Date(a.transactions[0].timestamp) - new Date(b.transactions[0].timestamp);
+          }
+          // If transactions are not available, fallback to timestamp property
+          return new Date(a.timestamp || 0) - new Date(b.timestamp || 0);
+        });
+      };
+      
+      // Sort wallets in each group
+      const sortedBuyWallets = sortWalletsByFirstTransaction(buyWallets);
+      const sortedSellWallets = sortWalletsByFirstTransaction(sellWallets);
+      
+      // Format wallets for display
+      const formatWallet = wallet => {
         // Determine if this wallet line was updated
         const updateEmoji = wallet.isUpdated ? '🔄 ' : '';
         
@@ -51,8 +71,27 @@ const telegramMessageService = {
         // Get base symbol, default to SOL if not specified
         const baseSymbol = wallet.baseSymbol || "SOL";
         
-        message += `${updateEmoji}${walletEmoji} ${displayName}: ${baseAmount}${baseSymbol}@${formattedMC} mcap\n`;
-      });
+        return `${updateEmoji}${walletEmoji} ${displayName}: ${baseAmount}${baseSymbol}@${formattedMC} mcap`;
+      };
+      
+      // Add buy wallets to message
+      if (sortedBuyWallets.length > 0) {
+        sortedBuyWallets.forEach(wallet => {
+          message += formatWallet(wallet) + '\n';
+        });
+      }
+      
+      // Add a separator between buys and sells if both exist
+      if (sortedBuyWallets.length > 0 && sortedSellWallets.length > 0) {
+        message += '\n';
+      }
+      
+      // Add sell wallets to message
+      if (sortedSellWallets.length > 0) {
+        sortedSellWallets.forEach(wallet => {
+          message += formatWallet(wallet) + '\n';
+        });
+      }
       
       return message;
     } catch (error) {
