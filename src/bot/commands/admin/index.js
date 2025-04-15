@@ -3,11 +3,15 @@ const debugCommand = require('./debugCommand');
 const simulateCommand = require('./simulateCommand');
 const cacheCommand = require('./cacheCommand');
 const quickSimCommand = require('./quickSimCommand');
+const sellTxCommand = require('./sellTxCommand');
+const buyTxCommand = require('./buyTxCommand');
 
-// Exporter toutes les commandes admin
+// Export all admin commands
 module.exports = [
   debugCommand,
   simulateCommand,
   cacheCommand,
-  quickSimCommand
+  quickSimCommand,
+  sellTxCommand,
+  buyTxCommand
 ];

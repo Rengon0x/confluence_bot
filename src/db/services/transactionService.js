@@ -16,13 +16,13 @@ const transactionService = {
     return db.collection(TransactionModel.collectionName);
   },
 
-  /**
-   * Store a transaction in the database
-   * @param {Object} transaction - The transaction to store
-   * @param {string} groupId - The group ID this transaction belongs to
-   * @returns {Promise<Object>} The stored transaction
-   */
-  async storeTransaction(transaction, groupId) {
+/**
+ * Store a transaction in the database
+ * @param {Object} transaction - The transaction to store
+ * @param {string} groupId - The group ID this transaction belongs to
+ * @returns {Promise<Object>} The stored transaction
+ */
+async storeTransaction(transaction, groupId) {
     try {
       const collection = await this.getCollection();
       
@@ -35,11 +35,13 @@ const transactionService = {
         usdValue: transaction.usdValue || 0,
         marketCap: transaction.marketCap || 0,
         timestamp: transaction.timestamp || new Date(),
-        groupId: groupId
+        groupId: groupId,
+        baseAmount: transaction.baseAmount || 0,  // Make sure we store baseAmount
+        baseSymbol: transaction.baseSymbol || ''  // Make sure we store baseSymbol
       };
       
       const result = await collection.insertOne(transactionDoc);
-      logger.debug(`Transaction stored in MongoDB: ${transaction.type} ${transaction.coin} by ${transaction.walletName}`);
+      logger.debug(`Transaction stored in MongoDB: ${transaction.type} ${transaction.coin} by ${transaction.walletName}, base amount: ${transaction.baseAmount} ${transaction.baseSymbol}`);
       
       return { ...transactionDoc, _id: result.insertedId };
     } catch (error) {
@@ -84,12 +86,12 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
     }
   },
 
-  /**
-   * Load recent transactions for all groups
-   * @param {number} windowMinutes - How far back to look in minutes
-   * @returns {Promise<Object>} Map of transactions by key (groupId_type_coin)
-   */
-  async loadRecentTransactions(windowMinutes = 60) {
+ /**
+ * Load recent transactions for all groups
+ * @param {number} windowMinutes - How far back to look in minutes
+ * @returns {Promise<Object>} Map of transactions by key (groupId_type_coin)
+ */
+async loadRecentTransactions(windowMinutes = 60) {
     try {
       const collection = await this.getCollection();
       
@@ -100,6 +102,24 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       }).toArray();
       
       logger.info(`Loaded ${transactions.length} recent transactions from MongoDB (window: ${windowMinutes} min)`);
+      
+      // Make sure we properly process transaction types and base amounts
+      transactions.forEach(tx => {
+        // Ensure type is properly set
+        if (!tx.type) {
+          // If type is missing, try to infer it
+          tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
+        }
+        
+        // Ensure baseAmount and baseSymbol are set
+        if (tx.baseAmount === undefined) {
+          tx.baseAmount = 0;
+        }
+        
+        if (!tx.baseSymbol) {
+          tx.baseSymbol = 'SOL';
+        }
+      });
       
       return transactions;
     } catch (error) {

@@ -7,6 +7,9 @@ const transactionService = require('../db/services/transactionService');
 /**
  * Service to detect buy and sell confluences
  */
+
+const startupTime = new Date();
+
 const confluenceService = {
   // Cache to store recent transactions for fast access
   transactionsCache: new NodeCache({ stdTTL: config.confluence.windowMinutes * 60 }),
@@ -138,6 +141,16 @@ const confluenceService = {
         }
         
         const transactions = this.transactionsCache.get(key) || [];
+
+        // Skip if no transactions are newer than the bot startup time
+        const hasNewTransactions = transactions.some(tx => 
+          new Date(tx.timestamp) > startupTime
+        );
+
+        if (!hasNewTransactions) {
+          logger.debug(`Skipping key ${key} - no new transactions since bot startup`);
+          continue;
+        }
         
         if (!coin && coinAddress && transactions.length > 0) {
           coin = transactions[0].coin;

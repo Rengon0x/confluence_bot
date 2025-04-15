@@ -13,6 +13,19 @@ const db = require('../db');
  */
 async function processMessage(trackerName, message) {
   try {
+
+    // 1. Check the sender username if available
+    if (trackerName === config.telegram.botUsername) {
+        logger.debug(`Ignoring message from our own bot`);
+        return;
+    }
+        
+    // 2. Check for confluence message format (messages that start with 🟢 or 🔴 followed by "CONFLUENCE")
+    if (message.match(/^[🟢🔴]\s+CONFLUENCE/)) {
+        logger.debug(`Ignoring confluence message`);
+        return;
+    }
+
     // Get all groups that need this message
     const groups = await db.getGroupsForTracker(trackerName);
     
@@ -32,7 +45,11 @@ async function processMessage(trackerName, message) {
       return;
     }
     
-    logger.info(`Extracted transaction: ${transaction.type.toUpperCase()} ${transaction.amount} ${transaction.coin}`);
+    // Keep track of the current token to filter confluences
+    const currentToken = transaction.coin;
+    const currentTokenAddress = transaction.coinAddress;
+    
+    logger.info(`Extracted transaction: ${transaction.type.toUpperCase()} ${transaction.amount} ${currentToken}`);
     
     // Process for each group
     for (const group of groups) {
@@ -41,18 +58,29 @@ async function processMessage(trackerName, message) {
         await confluenceService.addTransaction(transaction, group.id);
         
         // Check for confluences for this group
-        const confluences = confluenceService.checkConfluences(group.id);
+        const allConfluences = confluenceService.checkConfluences(group.id);
         
-        // If confluences are detected, send alerts
-        if (confluences && confluences.length > 0) {
-          for (const confluence of confluences) {
+        // Filter to only show confluences related to the current token
+        const relevantConfluences = allConfluences.filter(confluence => 
+          confluence.coin === currentToken || 
+          (currentTokenAddress && confluence.coinAddress === currentTokenAddress)
+        );
+        
+        // Log the filtering
+        if (allConfluences.length > relevantConfluences.length) {
+          logger.debug(`Filtered ${allConfluences.length} confluences down to ${relevantConfluences.length} relevant to token ${currentToken}`);
+        }
+        
+        // If relevant confluences are detected, send alerts
+        if (relevantConfluences && relevantConfluences.length > 0) {
+          for (const confluence of relevantConfluences) {
             // Format the message
             const message = telegramService.formatConfluenceMessage(confluence);
             
             // Send the alert via bot
             await sendConfluenceAlert(group.id, message);
             
-            logger.info(`Confluence detected for ${confluence.coin} in group ${group.id}: ${confluence.wallets.length} wallets`);
+            logger.info(`Confluence alert sent for ${confluence.coin} in group ${group.id}: ${confluence.wallets.length} wallets`);
           }
         }
       } catch (error) {
