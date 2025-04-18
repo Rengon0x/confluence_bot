@@ -49,18 +49,19 @@ const parserService = {
       
       // Check if this is a Swap transaction
       if (message.includes('Swapped')) {
-        // Look for patterns that represent buying (SOL/ETH -> Token)
-        const buyPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH).+for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i;
+        // Modified patterns to look for SOL/ETH/USDC/USDT
+        // Look for patterns that represent buying (Base token -> Token)
+        const buyPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT).+for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i;
         const buyMatch = message.match(buyPattern);
         
-        // Look for patterns that represent selling (Token -> SOL/ETH)
-        const sellPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+).+for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH)/i;
+        // Look for patterns that represent selling (Token -> Base token)
+        const sellPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+).+for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i;
         const sellMatch = message.match(sellPattern);
         
         logger.debug('BUY pattern match: ' + !!buyMatch);
         logger.debug('SELL pattern match: ' + !!sellMatch);
         
-        // BUY case - SOL/ETH being swapped FOR a token
+        // BUY case - Base token being swapped FOR a token
         if (buyMatch || (transactionType === 'buy' && message.includes('Swapped'))) {
           // Try different regex patterns to extract the values
           let baseAmount = 0;
@@ -71,17 +72,17 @@ const parserService = {
           // Try to extract from the standard pattern
           if (buyMatch) {
             baseAmount = parseFloat(buyMatch[1].replace(/[^\d.]/g, ''));
-            baseSymbol = buyMatch[2];
+            baseSymbol = buyMatch[2].toUpperCase(); // Ensure capitalization
             tokenAmount = parseFloat(buyMatch[3].replace(/[^\d.]/g, ''));
             tokenSymbol = this.normalizeTokenSymbol(buyMatch[4]);
           } 
           // Fallback to more generic extraction based on emoji and context
           else {
-            // Extract base token (SOL/ETH) amount
-            const baseMatch = message.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH)/i);
+            // Extract base token amount - look for SOL, ETH, USDC, USDT
+            const baseMatch = message.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i);
             if (baseMatch) {
               baseAmount = parseFloat(baseMatch[1].replace(/[^\d.]/g, ''));
-              baseSymbol = baseMatch[2];
+              baseSymbol = baseMatch[2].toUpperCase();
             }
             
             // Extract token symbol and amount
@@ -93,20 +94,10 @@ const parserService = {
           }
           
           // Extract USD value
-          const usdMatch = message.match(/\$\s*([\d,.]+)/);
-          const usdValue = usdMatch ? parseFloat(usdMatch[1].replace(/,/g, '')) : 0;
+          const usdValue = this.extractUsdValue(message);
           
           // Extract market cap if available
-          const mcMatch = message.match(/MC:\s*\$\s*([\d,.]+)([kMB]?)/);
-          let marketCap = 0;
-          if (mcMatch) {
-            const mcValue = parseFloat(mcMatch[1].replace(/,/g, ''));
-            const mcUnit = mcMatch[2] || '';
-            if (mcUnit === 'k') marketCap = mcValue * 1000;
-            else if (mcUnit === 'M') marketCap = mcValue * 1000000;
-            else if (mcUnit === 'B') marketCap = mcValue * 1000000000;
-            else marketCap = mcValue;
-          }
+          const marketCap = this.extractMarketCap(message);
           
           logger.info(`Message type: BUY | Wallet: ${walletName} | ${baseAmount} ${baseSymbol} → ${tokenAmount} ${tokenSymbol} | MC: ${this.formatMarketCap(marketCap)} | Address: ${coinAddress || 'none'}`);
           
@@ -124,7 +115,7 @@ const parserService = {
           );
         }
         
-        // SELL case - Token being swapped FOR SOL/ETH
+        // SELL case - Token being swapped FOR a base token
         if (sellMatch || (transactionType === 'sell' && message.includes('Swapped'))) {
           // Extract values for sell transaction
           let tokenAmount = 0;
@@ -137,7 +128,7 @@ const parserService = {
             tokenAmount = parseFloat(sellMatch[1].replace(/[^\d.]/g, ''));
             tokenSymbol = this.normalizeTokenSymbol(sellMatch[2]);
             baseAmount = parseFloat(sellMatch[3].replace(/[^\d.]/g, ''));
-            baseSymbol = sellMatch[4];
+            baseSymbol = sellMatch[4].toUpperCase(); // Ensure capitalization
           }
           // Fallback to more generic extraction
           else {
@@ -148,29 +139,19 @@ const parserService = {
               tokenSymbol = this.normalizeTokenSymbol(tokenMatch[2]);
             }
             
-            // Extract base token (SOL/ETH) amount
-            const baseMatch = message.match(/for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH)/i);
+            // Extract base token (SOL/ETH/USDC/USDT) amount
+            const baseMatch = message.match(/for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i);
             if (baseMatch) {
               baseAmount = parseFloat(baseMatch[1].replace(/[^\d.]/g, ''));
-              baseSymbol = baseMatch[2];
+              baseSymbol = baseMatch[2].toUpperCase();
             }
           }
           
           // Extract USD value
-          const usdMatch = message.match(/\$\s*([\d,.]+)/);
-          const usdValue = usdMatch ? parseFloat(usdMatch[1].replace(/,/g, '')) : 0;
+          const usdValue = this.extractUsdValue(message);
           
           // Extract market cap if available
-          const mcMatch = message.match(/MC:\s*\$\s*([\d,.]+)([kMB]?)/);
-          let marketCap = 0;
-          if (mcMatch) {
-            const mcValue = parseFloat(mcMatch[1].replace(/,/g, ''));
-            const mcUnit = mcMatch[2] || '';
-            if (mcUnit === 'k') marketCap = mcValue * 1000;
-            else if (mcUnit === 'M') marketCap = mcValue * 1000000;
-            else if (mcUnit === 'B') marketCap = mcValue * 1000000000;
-            else marketCap = mcValue;
-          }
+          const marketCap = this.extractMarketCap(message);
           
           logger.info(`Message type: SELL | Wallet: ${walletName} | ${tokenAmount} ${tokenSymbol} → ${baseAmount} ${baseSymbol} | MC: ${this.formatMarketCap(marketCap)} | Address: ${coinAddress || 'none'}`);
           
@@ -196,6 +177,38 @@ const parserService = {
       logger.error('Error parsing message:', error);
       return null;
     }
+  },
+  
+  /**
+   * Extract USD value from message
+   * @param {string} message - Message to parse
+   * @returns {number} - Extracted USD value
+   */
+  extractUsdValue(message) {
+    const usdMatch = message.match(/\$\s*([\d,.]+)/);
+    return usdMatch ? parseFloat(usdMatch[1].replace(/,/g, '')) : 0;
+  },
+  
+  /**
+   * Extract market cap from message
+   * @param {string} message - Message to parse
+   * @returns {number} - Extracted market cap in numbers
+   */
+  extractMarketCap(message) {
+    const mcMatch = message.match(/MC:\s*\$\s*([\d,.]+)([kMB]?)/);
+    let marketCap = 0;
+    
+    if (mcMatch) {
+      const mcValue = parseFloat(mcMatch[1].replace(/,/g, ''));
+      const mcUnit = mcMatch[2] || '';
+      
+      if (mcUnit === 'k') marketCap = mcValue * 1000;
+      else if (mcUnit === 'M') marketCap = mcValue * 1000000;
+      else if (mcUnit === 'B') marketCap = mcValue * 1000000000;
+      else marketCap = mcValue;
+    }
+    
+    return marketCap;
   },
   
   /**

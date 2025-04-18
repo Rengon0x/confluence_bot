@@ -5,6 +5,8 @@ const cacheCommand = require('./cacheCommand');
 const quickSimCommand = require('./quickSimCommand');
 const sellTxCommand = require('./sellTxCommand');
 const buyTxCommand = require('./buyTxCommand');
+const simulateUsdcCommand = require('./simulateUsdcCommand');
+const stablecoinTxCommands = require('./stablecoinTxCommands');
 
 // Export all admin commands
 module.exports = [
@@ -13,5 +15,9 @@ module.exports = [
   cacheCommand,
   quickSimCommand,
   sellTxCommand,
-  buyTxCommand
+  buyTxCommand,
+  simulateUsdcCommand,
+  stablecoinTxCommands.buyTxUsdcCommand,
+  stablecoinTxCommands.buyTxUsdtCommand,
+  stablecoinTxCommands.sellTxUsdcCommand
 ];

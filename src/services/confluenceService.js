@@ -24,7 +24,7 @@ const confluenceService = {
   async initialize() {
     try {
       // Load recent transactions from MongoDB
-      const transactions = await transactionService.loadRecentTransactions(60); // 60 minutes pour le cache
+      const transactions = await transactionService.loadRecentTransactions(60); // 60 minutes for cache
       
       // Group transactions and populate the cache
       const grouped = {};
@@ -36,7 +36,7 @@ const confluenceService = {
           logger.debug(`Setting default type ${tx.type} for transaction from wallet ${tx.walletName}`);
         }
         
-        // Déterminer la clé de cache appropriée
+        // Determine the appropriate cache key - prioritize address over name
         let key;
         if (tx.coinAddress && tx.coinAddress.length > 0) {
           key = `${tx.groupId}_${tx.type}_addr_${tx.coinAddress}`;
@@ -57,9 +57,9 @@ const confluenceService = {
           usdValue: tx.usdValue,
           timestamp: tx.timestamp,
           marketCap: tx.marketCap || 0,
-          type: tx.type,                // Préserver le type de transaction
-          baseAmount: tx.baseAmount || 0,  // Préserver le montant de base
-          baseSymbol: tx.baseSymbol || ''  // Préserver le symbole de base
+          type: tx.type,                // Preserve transaction type
+          baseAmount: tx.baseAmount || 0,  // Preserve base amount
+          baseSymbol: tx.baseSymbol || ''  // Preserve base symbol
         });
       }
       
@@ -74,53 +74,59 @@ const confluenceService = {
     }
   },
   
-  /**
-   * Add a transaction to the service
-   * @param {Transaction} transaction - Transaction to add
-   * @param {string} groupId - Group ID
-   */
-  async addTransaction(transaction, groupId = 'default') {
-    try {
-      // Create a composite key based on group, type, and either token address or name
-      let key;
-      if (transaction.coinAddress && transaction.coinAddress.length > 0) {
-        key = `${groupId}_${transaction.type}_addr_${transaction.coinAddress}`;
-        logger.debug(`Using address-based key: ${key} for token ${transaction.coin}`);
-      } else {
-        key = `${groupId}_${transaction.type}_name_${transaction.coin}`;
-        logger.debug(`Using name-based key: ${key} for token ${transaction.coin}`);
-      }
+ /**
+ * Add a transaction to the service - amélioration des logs
+ * @param {Transaction} transaction - Transaction to add
+ * @param {string} groupId - Group ID
+ */
+async addTransaction(transaction, groupId = 'default') {
+  try {
+    // Prioritize token address if available, otherwise use name
+    let key;
+    if (transaction.coinAddress && transaction.coinAddress.trim().length > 0) {
+      key = `${groupId}_${transaction.type}_addr_${transaction.coinAddress}`;
       
-      // Store in MongoDB first
-      await transactionService.storeTransaction(transaction, groupId);
+      // Improved log for debugging - include both name and address
+      logger.debug(`Using address-based key: ${key} for token ${transaction.coin || 'UNKNOWN'} (address: ${transaction.coinAddress})`);
+    } else {
+      key = `${groupId}_${transaction.type}_name_${transaction.coin}`;
       
-      // Then update the cache
-      let transactions = this.transactionsCache.get(key) || [];
-      
-      // Add the new transaction with all required fields
-      transactions.push({
-        walletName: transaction.walletName,
-        coin: transaction.coin,
-        coinAddress: transaction.coinAddress,
-        amount: transaction.amount,
-        usdValue: transaction.usdValue,
-        timestamp: transaction.timestamp,
-        marketCap: transaction.marketCap || 0,
-        baseAmount: transaction.baseAmount || 0,
-        baseSymbol: transaction.baseSymbol || '',
-        type: transaction.type 
-      });
-      
-      // Save to cache
-      this.transactionsCache.set(key, transactions);
-      
-      logger.debug(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin} by ${transaction.walletName}, base amount: ${transaction.baseAmount} ${transaction.baseSymbol}`);
-      return true;
-    } catch (error) {
-      logger.error('Error adding transaction:', error);
-      return false;
+      // Log the missing address
+      logger.debug(`Using name-based key: ${key} for token ${transaction.coin} (no address available)`);
     }
-  },
+    
+    // Store in MongoDB first
+    await transactionService.storeTransaction(transaction, groupId);
+    
+    // Then update the cache
+    let transactions = this.transactionsCache.get(key) || [];
+    
+    // Add the new transaction with all required fields
+    transactions.push({
+      walletName: transaction.walletName,
+      coin: transaction.coin,
+      coinAddress: transaction.coinAddress,
+      amount: transaction.amount,
+      usdValue: transaction.usdValue,
+      timestamp: transaction.timestamp,
+      marketCap: transaction.marketCap || 0,
+      baseAmount: transaction.baseAmount || 0,
+      baseSymbol: transaction.baseSymbol || '',
+      type: transaction.type  // Ensure we're storing the transaction type
+    });
+    
+    // Save to cache
+    this.transactionsCache.set(key, transactions);
+    
+    // Improved log message
+    logger.info(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin || transaction.coinAddress} by ${transaction.walletName}, key: ${key}`);
+    
+    return true;
+  } catch (error) {
+    logger.error('Error adding transaction:', error);
+    return false;
+  }
+},
   
   /**
    * Check for confluences
@@ -203,12 +209,15 @@ const confluenceService = {
         
         if (allTransactions.length === 0) continue;
         
-        logger.debug(`Processing token ${coin || coinAddress}: ${buyTransactions.length} buy txs, ${sellTransactions.length} sell txs`);
+        // Add better logging for token identification
+        logger.debug(`Processing token ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${buyTransactions.length} buy txs, ${sellTransactions.length} sell txs`);
         
         // Generate a unique key for this token's confluence
         const confluenceKey = coinAddress && coinAddress.length > 0 
           ? `${groupId}_addr_${coinAddress}` // Remove transaction type from key
           : `${groupId}_name_${coin}`;
+
+        logger.debug(`Using confluence key: ${confluenceKey} based on ${coinAddress ? 'address' : 'name'}`);
           
         // Get existing confluence for this token
         const existingConfluence = this.detectedConfluences.get(confluenceKey) || { wallets: [] };
@@ -224,6 +233,10 @@ const confluenceService = {
             usdValue: 0,
             baseAmount: 0,
             marketCap: 0,
+            buyAmount: 0,
+            sellAmount: 0,
+            buyBaseAmount: 0,
+            sellBaseAmount: 0,
             transactions: [],
             isUpdated: false,
             type: wallet.type // Preserve original type
@@ -253,7 +266,11 @@ const confluenceService = {
               marketCap: tx.marketCap || 0,
               baseAmount: tx.baseAmount || 0,
               baseSymbol: tx.baseSymbol || '',
-              type: tx.type,
+              type: tx.type,  // Initial type
+              buyAmount: tx.type === 'buy' ? tx.amount : 0,
+              sellAmount: tx.type === 'sell' ? tx.amount : 0,
+              buyBaseAmount: tx.type === 'buy' ? (tx.baseAmount || 0) : 0,
+              sellBaseAmount: tx.type === 'sell' ? (tx.baseAmount || 0) : 0,
               transactions: [tx],
               isUpdated: existingConfluence.wallets.length > 0 // Mark as updated if it's a new wallet in an existing confluence
             });
@@ -264,8 +281,18 @@ const confluenceService = {
             // Always add the transaction to the wallet's transaction history
             wallet.transactions.push(tx);
             
-            // Update transaction type (most recent transaction's type wins)
+            // Update the latest type (for update detection purposes), but preserve transaction history
+            const previousType = wallet.type;
             wallet.type = tx.type;
+            
+            // Track buy and sell amounts separately
+            if (tx.type === 'buy') {
+              wallet.buyAmount = (wallet.buyAmount || 0) + tx.amount;
+              wallet.buyBaseAmount = (wallet.buyBaseAmount || 0) + (tx.baseAmount || 0);
+            } else if (tx.type === 'sell') {
+              wallet.sellAmount = (wallet.sellAmount || 0) + tx.amount;
+              wallet.sellBaseAmount = (wallet.sellBaseAmount || 0) + (tx.baseAmount || 0);
+            }
             
             // Update values
             wallet.amount += tx.amount;
@@ -287,16 +314,18 @@ const confluenceService = {
               }
             }
             
-            // Mark as updated if the type changed or new transactions added
+            // Mark as updated if new transaction is of a different type or adds significant value
             const previousWallet = existingConfluence.wallets.find(w => w.walletName === wallet.walletName);
-            if (previousWallet && (previousWallet.type !== wallet.type || 
-                previousWallet.baseAmount !== wallet.baseAmount)) {
-              wallet.isUpdated = true;
+            if (previousWallet) {
+              if (previousType !== wallet.type || 
+                  Math.abs(previousWallet.baseAmount - wallet.baseAmount) > 0.01) {
+                wallet.isUpdated = true;
+              }
             }
           }
         }
         
-        // Create an array of wallets from the map
+        // Convert the wallet map to an array, preserving order of appearance
         let wallets = [];
         
         // First add existing wallets in their original order
@@ -335,8 +364,8 @@ const confluenceService = {
           
           // Determine the primary transaction type based on most recent activity
           // or the type with the most transactions
-          const buyWallets = wallets.filter(w => w.type === 'buy').length;
-          const sellWallets = wallets.filter(w => w.type === 'sell').length;
+          const buyWallets = wallets.filter(w => w.buyBaseAmount > 0).length;
+          const sellWallets = wallets.filter(w => w.sellBaseAmount > 0).length;
           const primaryType = buyWallets >= sellWallets ? 'buy' : 'sell';
           
           // Create the confluence object
@@ -365,12 +394,12 @@ const confluenceService = {
             // Only add to results if at least one wallet was updated
             if (wallets.some(w => w.isUpdated)) {
               confluences.push(confluence);
-              logger.info(`Unified confluence update detected for ${coin || coinAddress}: ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)`);
+              logger.info(`Unified confluence update detected for ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)`);
             }
           } else {
             // New confluence
             confluences.push(confluence);
-            logger.info(`Unified confluence detected for ${coin || coinAddress}: ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)`);
+            logger.info(`Unified confluence detected for ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)`);
           }
         }
       }
@@ -392,7 +421,6 @@ const confluenceService = {
     return config.confluence.minWallets;
   },
 
-
   /**
    * Estimate the used cache size
    */
@@ -405,7 +433,7 @@ const confluenceService = {
       const transactions = this.transactionsCache.get(key) || [];
       totalEntries += transactions.length;
       
-      // Estimation grossière: chaque transaction pèse environ 500 octets
+      // Rough estimation: each transaction is approximately 500 bytes
       estimatedSizeBytes += transactions.length * 500;
     }
     
@@ -417,7 +445,10 @@ const confluenceService = {
     };
   },
 
-  // verify txs
+ 
+  /**
+   * Amélioration de la fonction findTransactionsForToken pour inclure plus d'informations sur l'adresse
+   */
   findTransactionsForToken(tokenSymbolOrAddress) {
     const keys = this.transactionsCache.keys();
     logger.debug(`--- LOOKING FOR TOKEN: ${tokenSymbolOrAddress} ---`);
@@ -425,16 +456,23 @@ const confluenceService = {
     let found = false;
     
     for (const key of keys) {
-    if (key.includes(`_addr_${tokenSymbolOrAddress}`) || 
-        key.includes(`_name_${tokenSymbolOrAddress}`)) {
-
+      // Check both address-based and name-based keys
+      if (key.includes(`_addr_${tokenSymbolOrAddress}`) || 
+          key.includes(`_name_${tokenSymbolOrAddress}`)) {
+        
         found = true;
         const transactions = this.transactionsCache.get(key) || [];
         logger.debug(`Found in key: ${key}`);
         logger.debug(`  Transactions: ${transactions.length}`);
         
+        // Add details about the first transaction to see full token info
+        if (transactions.length > 0) {
+          const firstTx = transactions[0];
+          logger.debug(`  Token details: Name=${firstTx.coin || 'UNKNOWN'}, Address=${firstTx.coinAddress || 'none'}`);
+        }
+        
         for (const tx of transactions) {
-          logger.debug(`  - Wallet: ${tx.walletName}, Amount: ${tx.amount}, Time: ${new Date(tx.timestamp).toISOString()}`);
+          logger.debug(`  - Wallet: ${tx.walletName}, Amount: ${tx.amount}, Type: ${tx.type}, Base: ${tx.baseAmount} ${tx.baseSymbol}, Time: ${new Date(tx.timestamp).toISOString()}`);
         }
       }
     }
@@ -446,6 +484,9 @@ const confluenceService = {
     logger.debug(`--- END TOKEN SEARCH ---`);
   },
 
+  /**
+   * Dump the entire transactions cache for debugging
+   */
   dumpTransactionsCache() {
     const keys = this.transactionsCache.keys();
     logger.debug(`--- TRANSACTION CACHE DUMP ---`);
@@ -510,7 +551,7 @@ const confluenceService = {
       if (cacheStats.estimatedSizeMB > 100) {
         logger.warn(`Cache size exceeds threshold (${cacheStats.estimatedSizeMB.toFixed(2)}MB), performing additional cleanup`);
         
-        // Sort the tx by date
+        // Sort the keys by date
         const sortedKeys = [...keys].sort((a, b) => {
           const txA = this.transactionsCache.get(a);
           const txB = this.transactionsCache.get(b);
@@ -524,7 +565,7 @@ const confluenceService = {
           return latestB - latestA; 
         });
         
-        // Delete the 30% oldest txs
+        // Delete the 30% oldest transaction groups
         const keysToRemove = sortedKeys.slice(Math.floor(sortedKeys.length * 0.7));
         for (const key of keysToRemove) {
           this.transactionsCache.del(key);
