@@ -9,6 +9,7 @@ const transactionService = require('./db/services/transactionService');
 /**
  * Main application entry point
  */
+
 async function startApp() {
   try {
     // Connect to MongoDB
