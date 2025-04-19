@@ -17,6 +17,23 @@ function setupMessageHandler() {
       // Don't process messages from the bot itself or empty messages
       if (message.out || !message.text) return;
       
+      // Preserve the original message entities
+      const messageWithEntities = {
+        text: message.text,
+        entities: message.entities || []
+      };
+      
+      // Log entities for debugging
+      if (message.entities && message.entities.length > 0) {
+        logger.debug(`Message contains ${message.entities.length} entities`);
+        logger.debug(`Full entities object: ${JSON.stringify(message.entities)}`);
+        
+        for (let i = 0; i < message.entities.length; i++) {
+          const entity = message.entities[i];
+          logger.debug(`Entity ${i}: ${JSON.stringify(entity)}`);
+        }
+      }
+      
       // Try different ways to get sender information
       const senderId = message.senderId || (message.sender ? message.sender.id : null);
       const senderUsername = message.sender ? message.sender.username : null;
@@ -35,7 +52,8 @@ function setupMessageHandler() {
             String(tracker.entity.id) === String(senderId)) {
           
           logger.info(`Matched message from tracked source: ${trackerName}`);
-          await processMessage(trackerName, message.text);
+          // Pass the message with entities instead of just the text
+          await processMessage(trackerName, messageWithEntities);
           break;
         }
       }

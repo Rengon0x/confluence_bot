@@ -13,17 +13,19 @@ const db = require('../db');
  */
 async function processMessage(trackerName, message) {
   try {
-
+    // Handle both string and object message types
+    const messageText = typeof message === 'string' ? message : message.text;
+    
     // 1. Check the sender username if available
     if (trackerName === config.telegram.botUsername) {
-        logger.debug(`Ignoring message from our own bot`);
-        return;
+      logger.debug(`Ignoring message from our own bot`);
+      return;
     }
         
     // 2. Check for confluence message format (messages that start with 🟢 or 🔴 followed by "CONFLUENCE")
-    if (message.match(/^[🟢🔴]\s+CONFLUENCE/)) {
-        logger.debug(`Ignoring confluence message`);
-        return;
+    if (messageText.match(/^[🟢🔴]\s+CONFLUENCE/)) {
+      logger.debug(`Ignoring confluence message`);
+      return;
     }
 
     // Get all groups that need this message
@@ -35,6 +37,11 @@ async function processMessage(trackerName, message) {
     }
     
     logger.info(`Processing message from ${trackerName} for ${groups.length} groups`);
+    
+    // Log entity data for debugging - since entities appear to be undefined
+    if (message.entities) {
+      logger.debug(`Message entity types: ${JSON.stringify(message.entities)}`);
+    }
     
     // Parse the message to extract transaction information
     const transaction = parserService.parseTrackerMessage(message);

@@ -8,61 +8,107 @@ const logger = require('../utils/logger');
 const parserService = {
   /**
    * Parse a wallet tracker message and extract transaction information
-   * @param {string} message - Message to parse
+   * @param {string|Object} message - Message to parse (string or object with text property)
    * @returns {Transaction|null} - Extracted transaction or null if the message is not a transaction
    */
   parseTrackerMessage(message) {
     try {
-      // Log the message for debugging
-      logger.info('New message detected: ' + message.substring(0, 100).replace(/\n/g, ' ') + '...');
+      // Handle case where message is an object vs a simple string
+      let messageText = typeof message === 'string' ? message : message.text;
       
-      // Extract wallet name (appears after # at beginning of message)
-      const walletNameMatch = message.match(/^#([^\n]+)/);
-      const walletName = walletNameMatch ? walletNameMatch[1] : 'unknown';
-      logger.debug('Wallet name match: ' + (walletName || 'none'));
+      // Extract URLs from message entities if they exist
+      let extractedUrls = [];
       
-      // Extract token address from the Chart URL - improved parsing
-      let coinAddress = '';
-      
-      // First try to extract from Chart parenthesis format: Chart (https://...)
-      const chartUrlMatch = message.match(/Chart\s*\(.*?\/([a-zA-Z0-9]+)(?:pump)?\)/i);
-      if (chartUrlMatch && chartUrlMatch[1]) {
-        coinAddress = chartUrlMatch[1];
-        logger.debug('Token address matched from Chart URL: ' + coinAddress);
-      } 
-      // Try alternative formats like photon-sol.tinyastro.io URLs
-      else {
-        const alternativeUrlMatch = message.match(/Chart.*io\/[^\/]+\/[^\/]+\/([A-Za-z0-9]+)(?:pump)?/i);
-        if (alternativeUrlMatch && alternativeUrlMatch[1]) {
-          coinAddress = alternativeUrlMatch[1];
-          logger.debug('Token address matched from alternative Chart URL: ' + coinAddress);
+      if (typeof message === 'object' && message.entities) {
+        // Look for MessageEntityTextUrl entities which contain the URLs
+        for (const entity of message.entities) {
+          if (entity.className === "MessageEntityTextUrl" && entity.url) {
+            extractedUrls.push(entity.url);
+            logger.debug(`Found URL in TextUrl entity: ${entity.url}`);
+          }
         }
       }
       
+      // Log the message for debugging
+      logger.info('New message detected: ' + messageText.substring(0, 100).replace(/\n/g, ' ') + '...');
+      logger.debug('Full message to parse for URL: ' + messageText);
+      
+      // Extract wallet name
+      const walletNameMatch = messageText.match(/^#([^\n]+)/);
+      const walletName = walletNameMatch ? walletNameMatch[1] : 'unknown';
+      logger.debug('Wallet name match: ' + (walletName || 'none'));
+      
+      // Extract token address from URLs
+      let coinAddress = '';
+      
+      // 1. First, check URLs extracted from entities
+      if (extractedUrls.length > 0) {
+        for (const url of extractedUrls) {
+          // Look for Chart URLs containing the address (photon-sol.tinyastro.io)
+          const photonMatch = url.match(/photon-sol\.tinyastro\.io\/en\/r\/@cielosol\/([A-Za-z0-9]+)(?:pump)?/i);
+          if (photonMatch && photonMatch[1]) {
+            coinAddress = photonMatch[1];
+            logger.debug('Token address matched from Photon URL: ' + coinAddress);
+            break;
+          }
+          
+          // Also check for Trojan bot URLs which also contain the token address
+          const trojanMatch = url.match(/nestor_trojanbot\?start=d-cielo-([A-Za-z0-9]+)(?:pump)?/i);
+          if (trojanMatch && trojanMatch[1]) {
+            coinAddress = trojanMatch[1];
+            logger.debug('Token address matched from Trojan URL: ' + coinAddress);
+            break;
+          }
+        }
+      }
+      
+      // 2. If nothing found in entities, try with the old method on text
+      if (!coinAddress) {
+        // Try various patterns in the text
+        const patterns = [
+          /Chart.*?photon-sol\.tinyastro\.io\/en\/r\/@cielosol\/([A-Za-z0-9]+)(?:pump)?/i,
+          /Chart\s*\(.*?\/([a-zA-Z0-9]+)(?:pump)?\)/i,
+          /trojanbot\?start=d-cielo-([A-Za-z0-9]+)(?:pump)?/i,
+          /@cielosol\/([A-Za-z0-9]{20,50})(?:pump)?/i
+        ];
+        
+        for (const pattern of patterns) {
+          const match = messageText.match(pattern);
+          if (match && match[1]) {
+            coinAddress = match[1];
+            logger.debug(`Token address matched using text pattern: ${coinAddress}`);
+            break;
+          }
+        }
+      }
+      
+      // Log the final extracted address
+      logger.debug('Final extracted token address: ' + (coinAddress || 'none'));
+      
       // Determine transaction type based on emoji
       let transactionType = null;
-      if (message.includes('🟢')) {
+      if (messageText.includes('🟢')) {
         transactionType = 'buy';
-      } else if (message.includes('🔴')) {
+      } else if (messageText.includes('🔴')) {
         transactionType = 'sell';
       }
       
       // Check if this is a Swap transaction
-      if (message.includes('Swapped')) {
+      if (messageText.includes('Swapped')) {
         // Modified patterns to look for SOL/ETH/USDC/USDT
         // Look for patterns that represent buying (Base token -> Token)
         const buyPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT).+for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i;
-        const buyMatch = message.match(buyPattern);
+        const buyMatch = messageText.match(buyPattern);
         
         // Look for patterns that represent selling (Token -> Base token)
         const sellPattern = /Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+).+for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i;
-        const sellMatch = message.match(sellPattern);
+        const sellMatch = messageText.match(sellPattern);
         
         logger.debug('BUY pattern match: ' + !!buyMatch);
         logger.debug('SELL pattern match: ' + !!sellMatch);
         
         // BUY case - Base token being swapped FOR a token
-        if (buyMatch || (transactionType === 'buy' && message.includes('Swapped'))) {
+        if (buyMatch || (transactionType === 'buy' && messageText.includes('Swapped'))) {
           // Try different regex patterns to extract the values
           let baseAmount = 0;
           let baseSymbol = 'SOL';
@@ -79,14 +125,14 @@ const parserService = {
           // Fallback to more generic extraction based on emoji and context
           else {
             // Extract base token amount - look for SOL, ETH, USDC, USDT
-            const baseMatch = message.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i);
+            const baseMatch = messageText.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i);
             if (baseMatch) {
               baseAmount = parseFloat(baseMatch[1].replace(/[^\d.]/g, ''));
               baseSymbol = baseMatch[2].toUpperCase();
             }
             
             // Extract token symbol and amount
-            const tokenMatch = message.match(/for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i);
+            const tokenMatch = messageText.match(/for[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i);
             if (tokenMatch) {
               tokenAmount = parseFloat(tokenMatch[1].replace(/[^\d.]/g, ''));
               tokenSymbol = this.normalizeTokenSymbol(tokenMatch[2]);
@@ -94,10 +140,10 @@ const parserService = {
           }
           
           // Extract USD value
-          const usdValue = this.extractUsdValue(message);
+          const usdValue = this.extractUsdValue(messageText);
           
           // Extract market cap if available
-          const marketCap = this.extractMarketCap(message);
+          const marketCap = this.extractMarketCap(messageText);
           
           logger.info(`Message type: BUY | Wallet: ${walletName} | ${baseAmount} ${baseSymbol} → ${tokenAmount} ${tokenSymbol} | MC: ${this.formatMarketCap(marketCap)} | Address: ${coinAddress || 'none'}`);
           
@@ -116,7 +162,7 @@ const parserService = {
         }
         
         // SELL case - Token being swapped FOR a base token
-        if (sellMatch || (transactionType === 'sell' && message.includes('Swapped'))) {
+        if (sellMatch || (transactionType === 'sell' && messageText.includes('Swapped'))) {
           // Extract values for sell transaction
           let tokenAmount = 0;
           let tokenSymbol = 'unknown';
@@ -133,14 +179,14 @@ const parserService = {
           // Fallback to more generic extraction
           else {
             // Extract token amount and symbol
-            const tokenMatch = message.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i);
+            const tokenMatch = messageText.match(/Swapped[\s\*]+([\d,.]+)[\s\*]+#([A-Z0-9•\-]+)/i);
             if (tokenMatch) {
               tokenAmount = parseFloat(tokenMatch[1].replace(/[^\d.]/g, ''));
               tokenSymbol = this.normalizeTokenSymbol(tokenMatch[2]);
             }
             
             // Extract base token (SOL/ETH/USDC/USDT) amount
-            const baseMatch = message.match(/for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i);
+            const baseMatch = messageText.match(/for[\s\*]+([\d,.]+)[\s\*]+#(SOL|ETH|USDC|USDT)/i);
             if (baseMatch) {
               baseAmount = parseFloat(baseMatch[1].replace(/[^\d.]/g, ''));
               baseSymbol = baseMatch[2].toUpperCase();
@@ -148,10 +194,10 @@ const parserService = {
           }
           
           // Extract USD value
-          const usdValue = this.extractUsdValue(message);
+          const usdValue = this.extractUsdValue(messageText);
           
           // Extract market cap if available
-          const marketCap = this.extractMarketCap(message);
+          const marketCap = this.extractMarketCap(messageText);
           
           logger.info(`Message type: SELL | Wallet: ${walletName} | ${tokenAmount} ${tokenSymbol} → ${baseAmount} ${baseSymbol} | MC: ${this.formatMarketCap(marketCap)} | Address: ${coinAddress || 'none'}`);
           
