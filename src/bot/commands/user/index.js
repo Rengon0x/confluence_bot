@@ -5,7 +5,8 @@ const stopCommand = require('./stopCommand');
 const settingsCommand = require('./settingsCommand');
 const statusCommand = require('./statusCommand');
 const removeCommand = require('./removeCommand');
-const recapCommand = require('./recapCommand'); 
+const recapCommand = require('./recapCommand');
+const quickRecapCommand = require('./quickRecapCommand');
 
 // Exporter toutes les commandes utilisateur
 module.exports = [
@@ -15,5 +16,6 @@ module.exports = [
   settingsCommand,
   statusCommand,
   removeCommand,
-  recapCommand  
+  recapCommand,
+  quickRecapCommand
 ];
