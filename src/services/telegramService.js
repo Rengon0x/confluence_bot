@@ -28,7 +28,7 @@ const telegramMessageService = {
         tokenIdentifier = '$UNKNOWN';
       }
       
-      let message = `${primaryEmoji} CONFLUENCE ${isUpdate} FOR ${tokenIdentifier}\nWallet details:\n\n`;
+      let message = `${primaryEmoji} CONFLUENCE ${isUpdate} FOR ${tokenIdentifier}\n\n`;
       
       // Create two arrays for wallets - preserving the original if wallet has both buy and sell
       const displayWallets = [];

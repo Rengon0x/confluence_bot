@@ -347,6 +347,7 @@ function formatComprehensiveAnalysisSummary(athResults, failedTokens, totalConfl
     
     const percentGain = result.athData.percentageGain;
     const timeToATH = result.athData.minutesToATH;
+    const initialMCap = result.initialMarketCap; // Capture the initial market cap
     
     // Check specifically for early dumps - tokens that dropped 50% before gaining 50%
     if (result.athData.drop50PctDetected && percentGain < 50) {
@@ -357,12 +358,13 @@ function formatComprehensiveAnalysisSummary(athResults, failedTokens, totalConfl
           minutesToDrop: drop50pct.minutesFromDetection,
           formattedTime: drop50pct.formattedTime,
           maxGain: percentGain,
-          address: result.tokenAddress
+          address: result.tokenAddress,
+          mcap: initialMCap // Include MCAP in early drop tokens
         });
       }
     }
     
-    // Format token entry with percentage gain and time to ATH
+    // Format token entry with percentage gain, time to ATH, and now include market cap
     let formattedTime;
     if (timeToATH > 0) {
       formattedTime = result.athData.timeToATHFormatted || formatTimeToATH(timeToATH);
@@ -374,7 +376,11 @@ function formatComprehensiveAnalysisSummary(athResults, failedTokens, totalConfl
       formattedTime = "N/A";
     }
     
-    const tokenEntry = `${result.tokenName} (${percentGain.toFixed(0)}% in ${formattedTime})`;
+    // Format market cap for display
+    const formattedMCap = formatMarketCap(initialMCap);
+    
+    // New token entry format including market cap
+    const tokenEntry = `${result.tokenName} (${percentGain.toFixed(0)}% in ${formattedTime}, MCAP: $${formattedMCap})`;
     
     // Add to the appropriate category based on the new classification
     if (percentGain <= -75) {
@@ -472,7 +478,9 @@ function formatComprehensiveAnalysisSummary(athResults, failedTokens, totalConfl
     earlyDropTokens.sort((a, b) => a.minutesToDrop - b.minutesToDrop);
     
     earlyDropTokens.forEach(token => {
-      message += `⚡ ${token.name} (Max gain: ${token.maxGain.toFixed(0)}%, dumped in ${token.formattedTime})\n`;
+      // Format the market cap for display
+      const formattedMCap = formatMarketCap(token.mcap);
+      message += `⚡ ${token.name} (Max gain: ${token.maxGain.toFixed(0)}%, dumped in ${token.formattedTime}, MCAP: $${formattedMCap})\n`;
     });
     
     message += '\n';
@@ -494,6 +502,25 @@ function formatComprehensiveAnalysisSummary(athResults, failedTokens, totalConfl
   message += `\n_Note: This analysis uses high precision 1m candles for the critical first 30 minutes._`;
   
   return message;
+}
+
+/**
+ * Format market cap for display
+ * @param {number} marketCap - Market cap value
+ * @returns {string} - Formatted market cap
+ */
+function formatMarketCap(marketCap) {
+  if (!marketCap || isNaN(marketCap)) return "Unknown";
+  
+  if (marketCap >= 1000000000) {
+    return `${(marketCap / 1000000000).toFixed(1)}B`;
+  } else if (marketCap >= 1000000) {
+    return `${(marketCap / 1000000).toFixed(1)}M`;
+  } else if (marketCap >= 1000) {
+    return `${(marketCap / 1000).toFixed(1)}k`;
+  } else {
+    return marketCap.toString();
+  }
 }
 
 /**
