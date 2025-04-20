@@ -5,12 +5,13 @@ const birdeyeService = require('../../../services/birdeyeService');
 
 /**
  * Command /quickrecap - Shows a quick ATH summary of tokens with confluences
+ * Optional parameter: number of tokens to analyze (e.g., /quickrecap 20)
  */
 const quickRecapCommand = {
   name: 'quickrecap',
-  regex: /\/quickrecap(?:@\w+)?/,
-  description: 'View a summary of confluences ATH performance',
-  handler: async (bot, msg) => {
+  regex: /\/quickrecap(?:@\w+)?(?:\s+(\d+))?/,
+  description: 'View a summary of confluences ATH performance (optionally specify number of tokens to analyze)',
+  handler: async (bot, msg, match) => {
     try {
       // Only respond in groups
       if (msg.chat.type !== 'group' && msg.chat.type !== 'supergroup') {
@@ -20,10 +21,15 @@ const quickRecapCommand = {
       
       const chatId = msg.chat.id;
       
+      // Check if a token limit was provided as parameter
+      const requestedTokenCount = match && match[1] ? parseInt(match[1], 10) : 10; // Default to 10 if not specified
+      const maxTokenLimit = 25; // Set a reasonable upper limit to avoid API overload
+      const tokenLimit = Math.min(requestedTokenCount, maxTokenLimit);
+      
       // Inform the user that we're processing their request
       const loadingMsg = await bot.sendMessage(
         chatId, 
-        "⏳ Analyzing token performance... This may take a minute as I fetch price data."
+        `⏳ Analyzing token performance for up to ${tokenLimit} tokens... This may take a minute as I fetch price data.`
       );
       
       // Get confluences for this group
@@ -74,21 +80,19 @@ const quickRecapCommand = {
       
       // Update loading message to show progress
       await bot.editMessageText(
-        `⏳ Found ${realTokens.length} tokens with valid addresses. Fetching ATH data...`,
+        `⏳ Found ${realTokens.length} tokens with valid addresses. Will analyze up to ${tokenLimit} of them...`,
         {
           chat_id: chatId,
           message_id: loadingMsg.message_id
         }
       );
       
-      // Limit to 10 most recent to avoid API rate limits and timeouts
-      // This is a more conservative limit to respect API quotas
-      const maxTokensToAnalyze = 10;
-      const tokensToAnalyze = realTokens.slice(0, maxTokensToAnalyze);
+      // Limit to the specified number of tokens
+      const tokensToAnalyze = realTokens.slice(0, tokenLimit);
       
-      if (realTokens.length > maxTokensToAnalyze) {
+      if (realTokens.length > tokenLimit) {
         await bot.editMessageText(
-          `⏳ Analyzing the ${maxTokensToAnalyze} most recent tokens out of ${realTokens.length} total...`,
+          `⏳ Analyzing ${tokenLimit} most recent tokens out of ${realTokens.length} total...`,
           {
             chat_id: chatId,
             message_id: loadingMsg.message_id
@@ -133,7 +137,7 @@ const quickRecapCommand = {
       }
       
       // Format the performance summary
-      const summaryMessage = formatQuickRecapSummary(athResults, confluences.length);
+      const summaryMessage = formatQuickRecapSummary(athResults, confluences.length, requestedTokenCount);
       
       // Send or edit the message
       await bot.editMessageText(
@@ -145,7 +149,7 @@ const quickRecapCommand = {
         }
       );
       
-      logger.info(`QuickRecap command executed for group ${chatId}, ${athResults.length}/${realTokens.length} tokens analyzed`);
+      logger.info(`QuickRecap command executed for group ${chatId}, analyzed ${athResults.length}/${realTokens.length} tokens (user requested: ${requestedTokenCount})`);
     } catch (error) {
       logger.error(`Error in quickrecap command: ${error.message}`);
       bot.sendMessage(
@@ -160,9 +164,10 @@ const quickRecapCommand = {
  * Format the quick recap summary message
  * @param {Array} athResults - Results of ATH analysis
  * @param {number} totalConfluences - Total number of confluences
+ * @param {number} requestedCount - Number of tokens the user requested to analyze
  * @returns {string} - Formatted message
  */
-function formatQuickRecapSummary(athResults, totalConfluences) {
+function formatQuickRecapSummary(athResults, totalConfluences, requestedCount) {
   if (!athResults || athResults.length === 0) {
     return "No performance data available for recent confluences.";
   }
@@ -232,7 +237,13 @@ function formatQuickRecapSummary(athResults, totalConfluences) {
   // Build the summary message
   let message = `📊 *CONFLUENCE PERFORMANCE SUMMARY*\n\n`;
   message += `Total confluences: ${totalConfluences}\n`;
-  message += `Analyzed tokens: ${athResults.length}\n\n`;
+  message += `Analyzed tokens: ${athResults.length}`;
+  
+  // Add info about requested token count if it differed from analyzed count
+  if (requestedCount > athResults.length) {
+    message += ` (requested: ${requestedCount})`;
+  }
+  message += `\n\n`;
   
   // Add performance distribution
   message += `*Performance Distribution:*\n`;
@@ -241,14 +252,15 @@ function formatQuickRecapSummary(athResults, totalConfluences) {
     if (category.count > 0) {
       message += `${category.emoji} *${category.label}*: ${category.count} tokens\n`;
       
-      // Add token details (limit to 3 per category to avoid huge messages)
-      const tokensToShow = category.tokens.slice(0, 3);
+      // Add token details for each category
+      // Limit to 5 per category for better readability when analyzing more tokens
+      const tokensToShow = category.tokens.slice(0, 5);
       if (tokensToShow.length > 0) {
         message += tokensToShow.map(t => `   • ${t}`).join('\n');
         
         // Add note if some tokens are not shown
-        if (category.tokens.length > 3) {
-          message += `\n   • _...and ${category.tokens.length - 3} more_`;
+        if (category.tokens.length > 5) {
+          message += `\n   • _...and ${category.tokens.length - 5} more_`;
         }
         
         message += '\n\n';
@@ -259,14 +271,24 @@ function formatQuickRecapSummary(athResults, totalConfluences) {
   // Add section for quick dumps (tokens that dropped 50% within 2 hours)
   if (earlyDropTokens.length > 0) {
     message += `\n*Quick Dumps (50% drop in under 2h):*\n`;
-    earlyDropTokens.forEach(token => {
+    
+    // Limit to 10 dumps to keep message size reasonable
+    const dumpsToShow = earlyDropTokens.slice(0, 10);
+    dumpsToShow.forEach(token => {
       message += `⚡ ${token.name} (dumped in ${token.formattedTime})\n`;
     });
+    
+    // Add note if not all dumps are shown
+    if (earlyDropTokens.length > 10) {
+      message += `_...and ${earlyDropTokens.length - 10} more quick dumps_\n`;
+    }
+    
     message += '\n';
   }
   
-  // Add a note about what this means
-  message += `_Note: Percentages show maximum gain after confluence detection._`;
+  // Add a note about the command's use
+  message += `_Note: Percentages show maximum gain after confluence detection._\n`;
+  message += `_Use "/quickrecap X" to analyze X most recent tokens (max: 25)._`;
   
   return message;
 }

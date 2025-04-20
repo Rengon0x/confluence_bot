@@ -7,6 +7,7 @@ const sellTxCommand = require('./sellTxCommand');
 const buyTxCommand = require('./buyTxCommand');
 const simulateUsdcCommand = require('./simulateUsdcCommand');
 const stablecoinTxCommands = require('./stablecoinTxCommands');
+const analyzeAllCommand = require('./analyzeAllCommand');
 
 // Export all admin commands
 module.exports = [
@@ -17,6 +18,7 @@ module.exports = [
   sellTxCommand,
   buyTxCommand,
   simulateUsdcCommand,
+  analyzeAllCommand,
   stablecoinTxCommands.buyTxUsdcCommand,
   stablecoinTxCommands.buyTxUsdtCommand,
   stablecoinTxCommands.sellTxUsdcCommand

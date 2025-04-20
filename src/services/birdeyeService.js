@@ -193,7 +193,7 @@ const birdeyeService = {
    * @param {Date|number} toTimestamp - End timestamp (optional, defaults to now)
    * @returns {Promise<Object|null>} - ATH data or null if not found
    */
-  async findATH(tokenAddress, fromTimestamp, toTimestamp = Date.now()) {
+  async findATH(tokenAddress, fromTimestamp, toTimestamp = Date.now(), options = {}) {
     try {
       // Convert Date objects to timestamps if needed
       const fromTs = fromTimestamp instanceof Date ? fromTimestamp.getTime() : fromTimestamp;
@@ -203,20 +203,65 @@ const birdeyeService = {
       const timeFrom = Math.floor(fromTs / 1000);
       const confluenceTimestamp = timeFrom; // Store original detection time
       
-      // Implement progressive approach - first analyze 2 hours with 5m resolution
-      const twoHoursAfter = timeFrom + (2 * 60 * 60); // 2 hours after detection
-      const timeTo = Math.min(Math.floor(toTs / 1000), twoHoursAfter);
+      // Check if we are using high precision mode
+      const useHighPrecision = options.highPrecision || false;
       
-      // Get first 2 hours price history with 5m resolution
-      const priceHistory = await this.getPriceHistory(tokenAddress, timeFrom, timeTo, {
-        preferredResolution: '5m',
-        confluenceTimestamp: confluenceTimestamp
-      });
+      // Default time windows
+      let firstPhaseMinutes = 30;  // Default first phase is 30 minutes
+      let secondPhaseMinutes = 90; // Default second phase is 90 minutes (30m-2h)
       
-      let allPriceHistory = priceHistory || [];
+      // Default resolutions
+      let firstPhaseResolution = '5m';  // Default resolution for first phase
+      let secondPhaseResolution = '15m'; // Default resolution for second phase
+      let thirdPhaseResolution = '30m';  // Default resolution for third phase
+      
+      // Override defaults if options are provided
+      if (useHighPrecision) {
+        logger.debug(`Using high precision analysis for token ${tokenAddress}`);
+        
+        // Override first phase duration if specified
+        if (options.initialMinutes && options.initialMinutes > 0) {
+          firstPhaseMinutes = options.initialMinutes;
+        }
+        
+        // Override resolutions if specified
+        if (options.initialResolution) {
+          firstPhaseResolution = options.initialResolution;
+        }
+        if (options.midResolution) {
+          secondPhaseResolution = options.midResolution;
+        }
+        if (options.lateResolution) {
+          thirdPhaseResolution = options.lateResolution;
+        }
+        
+        logger.debug(`Analysis phases: ${firstPhaseMinutes}m with ${firstPhaseResolution}, then with ${secondPhaseResolution}, then with ${thirdPhaseResolution}`);
+      }
+      
+      // Calculate phase end times
+      const firstPhaseEnd = timeFrom + (firstPhaseMinutes * 60); // e.g., first 30 minutes
+      const secondPhaseEnd = timeFrom + ((firstPhaseMinutes + secondPhaseMinutes) * 60); // e.g., 30m to 2h
+      
+      // Implement progressive approach - first analyze with high precision
+      const firstPhaseEndTime = Math.min(Math.floor(toTs / 1000), firstPhaseEnd);
+      
+      // Get first phase price history with high precision (e.g., 1m resolution)
+      logger.debug(`Fetching first phase (${firstPhaseResolution}) price history for ${tokenAddress}`);
+      const firstPhaseHistory = await this.getPriceHistory(
+        tokenAddress, 
+        timeFrom, 
+        firstPhaseEndTime, 
+        {
+          preferredResolution: firstPhaseResolution,
+          confluenceTimestamp: confluenceTimestamp
+        }
+      );
+      
+      // Initialize all price history with first phase data
+      let allPriceHistory = firstPhaseHistory || [];
       
       if (!allPriceHistory || allPriceHistory.length === 0) {
-        logger.warn(`No price history found for token ${tokenAddress} in first 2 hours`);
+        logger.warn(`No price history found for token ${tokenAddress} in first phase`);
         return null;
       }
       
@@ -227,15 +272,15 @@ const birdeyeService = {
         return null;
       }
       
-      // Find the maximum price and check for 50% drop in first 2 hours
+      // Find the maximum price and check for 50% drop in first phase
       let maxPrice = initialPrice;
       let maxPriceTimestamp = timeFrom;
       let maxPriceIndex = 0;
       let drop50PctDetected = false;
       let drop50PctTimestamp = 0;
-      let currentEndTime = timeTo;
+      let currentEndTime = firstPhaseEndTime;
       
-      // Process first batch of price data (first 2 hours)
+      // Process first batch of price data (first phase)
       for (let i = 0; i < allPriceHistory.length; i++) {
         const point = allPriceHistory[i];
         
@@ -247,7 +292,6 @@ const birdeyeService = {
         }
         
         // Check for 50% drop from INITIAL price (not from ATH)
-        // This is the key change - we're looking for when price drops 50% below the initial detection price
         if (point.value <= initialPrice * 0.5) {
           logger.debug(`-50% from initial price detected for ${tokenAddress} at ${point.unixTime}`);
           drop50PctDetected = true;
@@ -258,25 +302,29 @@ const birdeyeService = {
       }
       
       // If no 50% drop and we haven't reached the requested end time, fetch more data
-      if (!drop50PctDetected && twoHoursAfter < Math.floor(toTs / 1000)) {
-        // We've checked first 2 hours, now fetch 2-24h period with 15m resolution
-        const oneDayAfter = timeFrom + (24 * 60 * 60);
-        const nextEndTime = Math.min(Math.floor(toTs / 1000), oneDayAfter);
+      if (!drop50PctDetected && firstPhaseEndTime < Math.floor(toTs / 1000)) {
+        // We've checked first phase, now fetch second phase period with medium resolution
+        const secondPhaseEndTime = Math.min(Math.floor(toTs / 1000), secondPhaseEnd);
         
-        if (twoHoursAfter < nextEndTime) {
-          logger.debug(`Fetching 2-24h period for ${tokenAddress} with 15m resolution`);
-          const midPriceHistory = await this.getPriceHistory(tokenAddress, twoHoursAfter, nextEndTime, {
-            preferredResolution: '15m',
-            confluenceTimestamp: confluenceTimestamp
-          });
+        if (firstPhaseEndTime < secondPhaseEndTime) {
+          logger.debug(`Fetching second phase (${secondPhaseResolution}) period for ${tokenAddress}`);
+          const secondPhaseHistory = await this.getPriceHistory(
+            tokenAddress, 
+            firstPhaseEndTime, 
+            secondPhaseEndTime, 
+            {
+              preferredResolution: secondPhaseResolution,
+              confluenceTimestamp: confluenceTimestamp
+            }
+          );
           
-          if (midPriceHistory && midPriceHistory.length > 0) {
-            allPriceHistory = allPriceHistory.concat(midPriceHistory);
-            currentEndTime = nextEndTime;
+          if (secondPhaseHistory && secondPhaseHistory.length > 0) {
+            allPriceHistory = allPriceHistory.concat(secondPhaseHistory);
+            currentEndTime = secondPhaseEndTime;
             
             // Process this batch of data
-            for (let i = 0; i < midPriceHistory.length; i++) {
-              const point = midPriceHistory[i];
+            for (let i = 0; i < secondPhaseHistory.length; i++) {
+              const point = secondPhaseHistory[i];
               
               // Update max price if found
               if (point.value > maxPrice) {
@@ -287,7 +335,7 @@ const birdeyeService = {
               
               // Check for 50% drop from initial price
               if (point.value <= initialPrice * 0.5) {
-                logger.debug(`-50% from initial price detected in 2-24h period for ${tokenAddress}`);
+                logger.debug(`-50% from initial price detected in second phase for ${tokenAddress}`);
                 drop50PctDetected = true;
                 drop50PctTimestamp = point.unixTime;
                 currentEndTime = point.unixTime;
@@ -297,25 +345,29 @@ const birdeyeService = {
           }
         }
         
-        // If still no 50% drop and we need to check 24-48h period
-        if (!drop50PctDetected && oneDayAfter < Math.floor(toTs / 1000)) {
-          const twoDaysAfter = timeFrom + (48 * 60 * 60);
-          const finalEndTime = Math.min(Math.floor(toTs / 1000), twoDaysAfter);
+        // If still no 50% drop and we need to check third phase
+        if (!drop50PctDetected && secondPhaseEndTime < Math.floor(toTs / 1000)) {
+          const finalEndTime = Math.min(Math.floor(toTs / 1000), timeFrom + (48 * 60 * 60)); // Max 48h
           
-          if (oneDayAfter < finalEndTime) {
-            logger.debug(`Fetching 24-48h period for ${tokenAddress} with 30m resolution`);
-            const latePriceHistory = await this.getPriceHistory(tokenAddress, oneDayAfter, finalEndTime, {
-              preferredResolution: '30m',
-              confluenceTimestamp: confluenceTimestamp
-            });
+          if (secondPhaseEndTime < finalEndTime) {
+            logger.debug(`Fetching third phase (${thirdPhaseResolution}) period for ${tokenAddress}`);
+            const thirdPhaseHistory = await this.getPriceHistory(
+              tokenAddress, 
+              secondPhaseEndTime, 
+              finalEndTime, 
+              {
+                preferredResolution: thirdPhaseResolution,
+                confluenceTimestamp: confluenceTimestamp
+              }
+            );
             
-            if (latePriceHistory && latePriceHistory.length > 0) {
-              allPriceHistory = allPriceHistory.concat(latePriceHistory);
+            if (thirdPhaseHistory && thirdPhaseHistory.length > 0) {
+              allPriceHistory = allPriceHistory.concat(thirdPhaseHistory);
               currentEndTime = finalEndTime;
               
               // Process this batch of data
-              for (let i = 0; i < latePriceHistory.length; i++) {
-                const point = latePriceHistory[i];
+              for (let i = 0; i < thirdPhaseHistory.length; i++) {
+                const point = thirdPhaseHistory[i];
                 
                 // Update max price if found
                 if (point.value > maxPrice) {
@@ -326,7 +378,7 @@ const birdeyeService = {
                 
                 // Check for 50% drop from initial price
                 if (point.value <= initialPrice * 0.5) {
-                  logger.debug(`-50% from initial price detected in 24-48h period for ${tokenAddress}`);
+                  logger.debug(`-50% from initial price detected in third phase for ${tokenAddress}`);
                   drop50PctDetected = true;
                   drop50PctTimestamp = point.unixTime;
                   currentEndTime = point.unixTime;
