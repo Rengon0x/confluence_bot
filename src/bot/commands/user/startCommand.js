@@ -2,34 +2,68 @@
 const config = require('../../../config/config');
 const logger = require('../../../utils/logger');
 
-/**
- * Commande /start - Initialise le bot en chat privé
- */
 const startCommand = {
   name: 'start',
   regex: /\/start/,
-  description: 'Start the bot in private chat',
+  description: 'Start the bot in private chat or group',
   handler: async (bot, msg) => {
     const chatId = msg.chat.id;
     const firstName = msg.from.first_name;
     
-    // Vérifier si c'est un chat de groupe
-    if (msg.chat.type !== 'private') {
-      // Informer l'utilisateur d'utiliser la commande en privé
+    // Get forwarder usernames from config
+    const forwarder1Username = config.telegram.forwarders?.[0]?.forwarderUsername || 'YourForwarderUsername';
+    const forwarder2Username = config.telegram.forwarders?.[1]?.forwarderUsername || 'YourBackupForwarderUsername';
+    
+    // If it's a group chat
+    if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
       bot.sendMessage(
         chatId,
-        `Hi ${firstName}! The /start command is meant to be used in a private chat. Please message me directly @${config.telegram.botUsername} and send /start there to configure the bot properly.`
+        `👋 Welcome ${firstName}!\n\n` +
+        `*What this bot does:*\n` +
+        `This bot detects when multiple wallets buy or sell the same token (confluence) and sends alerts to help you spot trending tokens early.\n\n` +
+        
+        `*Setup this group in 4 easy steps:*\n` +
+        `1️⃣ Make sure this bot is an admin in the group\n` +
+        `2️⃣ Add our forwarder account @${forwarder1Username} and make it admin\n` +
+        `3️⃣ Use \`/setup @YourTrackerName\` (e.g., \`/setup @CieloTrackerPrivate_bot\`)\n` +
+        `4️⃣ Wait for confluence alerts to appear!\n\n` +
+        
+        `*Note:* We recommend also adding our backup forwarder @${forwarder2Username} to your group. ` +
+        `This serves as a fallback system if the main forwarder @${forwarder1Username} experiences connectivity issues or becomes temporarily unavailable.\n\n` +
+  
+        `*Tips:*You can monitor multiple wallet trackers in the same group by using \`/setup\` for each one separately. This increases your chances of finding confluences as the bot combines data from all your trackers!\n\n` +
+        
+        `Type /help for the complete guide and all available commands.`,
+        { parse_mode: 'Markdown' }
       );
       return;
     }
     
-    // Fonctionnalité pour le chat privé
+    // Private chat message
     bot.sendMessage(
       chatId,
-      `👋 Hi ${firstName}! I can detect when multiple wallets buy or sell the same coin.\n\n` +
-      `Please enter the username of your wallet tracker (with @ symbol), for example:\n` +
-      `@CieloTrackerPrivate_bot`
+      `👋 Hello ${firstName}!\n\n` +
+      `*What this bot does:*\n` +
+      `This bot monitors wallet trackers and alerts you when multiple wallets buy or sell the same token within a specific time period (confluence), helping you spot trending tokens early.\n\n` +
+      
+      `*How to set up:*\n` +
+      `1️⃣ Tell me which wallet tracker to monitor by typing its name with @ symbol\n` +
+      `   Example: @CieloTrackerPrivate_bot\n` +
+      `2️⃣ Add me to your Telegram group\n` +
+      `3️⃣ Add the forwarder @${forwarder1Username} to the same group\n` +
+      `4️⃣ Make both of us admins in the group\n` +
+      `5️⃣ Type /setup in the group to activate monitoring\n\n` +
+      
+      `*Note:* We recommend also adding our backup forwarder @${forwarder2Username} to your group. ` +
+      `This serves as a fallback system if the main forwarder @${forwarder1Username} experiences connectivity issues or becomes temporarily unavailable.\n\n` +
+
+      `*Tips:*You can monitor multiple wallet trackers in the same group by using \`/setup\` for each one separately. This increases your chances of finding confluences as the bot combines data from all your trackers!\n\n` +
+      
+      `Type /help anytime to see the complete guide and all available commands.`,
+      { parse_mode: 'Markdown' }
     );
+    
+    logger.info(`Start command executed by ${msg.from.username || msg.from.first_name} (${msg.from.id}) in ${msg.chat.type} chat`);
   }
 };
 

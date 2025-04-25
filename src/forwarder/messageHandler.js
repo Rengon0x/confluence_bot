@@ -67,6 +67,38 @@ function setupMessageHandler() {
   logger.info('All message handlers set up');
 }
 
+async function processMessageWithFailover(trackerName, messageWithEntities) {
+  try {
+    // First, try with the primary forwarder (forwarder1)
+    let client = getClientForTracker(trackerName);
+    
+    try {
+      // Attempt to process with the selected client
+      await processMessage(trackerName, messageWithEntities);
+      return true;
+    } catch (error) {
+      logger.error(`Error with primary forwarder: ${error.message}`);
+      
+      // If forwarder1 fails, try with forwarder2
+      if (clients.has('forwarder2') && client !== clients.get('forwarder2')) {
+        try {
+          client = clients.get('forwarder2');
+          await processMessage(trackerName, messageWithEntities);
+          return true;
+        } catch (backupError) {
+          logger.error(`Error with backup forwarder: ${backupError.message}`);
+        }
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    logger.error(`Failed to process message with failover: ${error.message}`);
+    return false;
+  }
+}
+
 module.exports = {
-  setupMessageHandler
+  setupMessageHandler,
+  processMessageWithFailover
 };

@@ -106,20 +106,24 @@ async function connectAllClients() {
  * @returns {TelegramClient} - Telegram client to use
  */
 function getClientForTracker(trackerName) {
-  if (clients.size === 0) {
-    throw new Error('No forwarder clients available');
+    if (clients.size === 0) {
+      throw new Error('No forwarder clients available');
+    }
+    
+    // Always try to use forwarder1 as priority
+    if (clients.has('forwarder1')) {
+      return clients.get('forwarder1');
+    }
+    
+    // If forwarder1 is not available, use forwarder2
+    if (clients.has('forwarder2')) {
+      return clients.get('forwarder2');
+    }
+    
+    // If none of the specific forwarders are available,
+    // take the first available one (fallback case)
+    return clients.values().next().value;
   }
-  
-  // Simple hash to always assign the same client to a tracker
-  const clientIds = Array.from(clients.keys());
-  const hashCode = Array.from(trackerName).reduce(
-    (hash, char) => ((hash << 5) - hash) + char.charCodeAt(0), 0
-  );
-  const index = Math.abs(hashCode) % clientIds.length;
-  
-  const clientId = clientIds[index];
-  return clients.get(clientId);
-}
 
 /**
  * Disconnect all clients
@@ -135,6 +139,47 @@ async function disconnectAllClients() {
   }
   clients.clear();
 }
+
+async function checkForwarderHealth() {
+    try {
+      // Check forwarder1 first
+      if (clients.has('forwarder1')) {
+        try {
+          // Perform a simple operation like getMe() to check if the client is operational
+          await clients.get('forwarder1').getMe();
+          logger.debug('forwarder1 is operational');
+        } catch (error) {
+          logger.warn(`forwarder1 appears to be down: ${error.message}`);
+          
+          // You could try to reconnect forwarder1 here
+          // or simply remove it from the map of available clients
+          clients.delete('forwarder1');
+        }
+      }
+      
+      // If forwarder1 is not available, check forwarder2
+      if (!clients.has('forwarder1') && clients.has('forwarder2')) {
+        try {
+          await clients.get('forwarder2').getMe();
+          logger.debug('forwarder2 is operational and will be used as primary');
+        } catch (error) {
+          logger.error(`forwarder2 also appears to be down: ${error.message}`);
+          clients.delete('forwarder2');
+        }
+      }
+      
+      // If no forwarder is available, you could try to reconnect them
+      if (clients.size === 0) {
+        logger.error('All forwarders are down, attempting to reconnect...');
+        await connectAllClients();
+      }
+    } catch (error) {
+      logger.error(`Error checking forwarder health: ${error.message}`);
+    }
+  }
+  
+// Call this function periodically
+setInterval(checkForwarderHealth, 5 * 60 * 1000);
 
 module.exports = {
   initClient,

@@ -11,7 +11,7 @@ const setupCommand = {
   regex: /\/setup(?:@\w+)?(?:\s+(.+))?/,
   description: 'Setup a tracker in a group',
   handler: async (bot, msg, match) => {
-    // Ne réagir que dans les groupes
+    // Only respond in groups
     if (msg.chat.type !== 'group' && msg.chat.type !== 'supergroup') {
       bot.sendMessage(msg.chat.id, "This command can only be used in groups. Please add me to a group first.");
       return;
@@ -20,25 +20,44 @@ const setupCommand = {
     const chatId = msg.chat.id;
     const chatName = msg.chat.title;
     
-    // Vérifier si un tracker a été spécifié
+    // Check if a tracker has been specified
     let trackerName = match && match[1] ? match[1].trim() : null;
     
     if (!trackerName) {
-      // Si aucun tracker n'est spécifié, demander d'en spécifier un
+      // If no tracker is specified, ask for one
       bot.sendMessage(
         chatId,
         "Please specify which tracker bot to monitor. For example:\n" +
-        `/setup CieloTrackerPrivate`
+        `/setup @CieloTrackerPrivate_bot`
       );
       return;
     }
     
-    // Nettoyer le format du nom du tracker
+    // Clean tracker name format
     trackerName = trackerName.replace(/^@/, '');
     
-    // Enregistrer ce groupe pour suivre le tracker spécifié
+    // Check if forwarders are members of this group
     try {
-      // Enregistrer le setup de tracking dans la base de données
+      const forwarder1Present = await isUserInChat(bot, chatId, config.telegram.forwarders[0].forwarderUsername);
+      const forwarder2Present = await isUserInChat(bot, chatId, config.telegram.forwarders[1].forwarderUsername);
+      
+      // If forwarders are missing, warn the user
+      if (!forwarder1Present || !forwarder2Present) {
+        let missingForwarders = [];
+        
+        if (!forwarder1Present) missingForwarders.push(`@${config.telegram.forwarders[0].forwarderUsername}`);
+        if (!forwarder2Present) missingForwarders.push(`@${config.telegram.forwarders[1].forwarderUsername}`);
+        
+        bot.sendMessage(
+          chatId,
+          `⚠️ Warning: The following forwarder accounts are not in this group yet:\n` +
+          `${missingForwarders.join(', ')}\n\n` +
+          `Please add them and make them admins for the bot to work properly.`
+        );
+      }
+      
+      // Continue with normal setup logic
+      // Register tracking setup in the database
       const success = await db.registerTracking(trackerName, chatId.toString(), chatName);
       
       if (success) {
@@ -67,5 +86,16 @@ const setupCommand = {
     }
   }
 };
+
+async function isUserInChat(bot, chatId, username) {
+  try {
+    // Get chat member info for the specified username
+    const chatMember = await bot.getChatMember(chatId, `@${username}`);
+    return chatMember && ['creator', 'administrator', 'member'].includes(chatMember.status);
+  } catch (error) {
+    // If getChatMember throws an error, the user is likely not in the chat
+    return false;
+  }
+}
 
 module.exports = setupCommand;

@@ -16,9 +16,9 @@ module.exports = {
       {
         id: 'forwarder2',
         forwarderUsername: process.env.FORWARDER_USERNAME_2,
-        phoneNumber: process.env.FORWARDER2_PHONE_NUMBER_BACKUP,
-        apiId: parseInt(process.env.TELEGRAM_API_ID_BACKUP || '0'),
-        apiHash: process.env.TELEGRAM_API_HASH_BACKUP || '',
+        phoneNumber: process.env.FORWARDER2_PHONE_NUMBER_2,
+        apiId: parseInt(process.env.TELEGRAM_API_ID_2 || '0'),
+        apiHash: process.env.TELEGRAM_API_HASH_2 || '',
         sessionPath: 'telegram-session-2.txt'
       }
     ]
