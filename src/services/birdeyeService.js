@@ -276,6 +276,14 @@ const birdeyeService = {
       let maxPrice = initialPrice;
       let maxPriceTimestamp = timeFrom;
       let maxPriceIndex = 0;
+      
+      // Initialize minimum price tracking (NEW)
+      let minPrice = initialPrice;
+      let minPriceTimestamp = timeFrom;
+      let minPriceIndex = 0;
+      let minPriceBeforeAth = initialPrice; // Track minimum price before ATH
+      let minPriceBeforeAthTimestamp = timeFrom;
+      
       let drop50PctDetected = false;
       let drop50PctTimestamp = 0;
       let currentEndTime = firstPhaseEndTime;
@@ -284,11 +292,36 @@ const birdeyeService = {
       for (let i = 0; i < allPriceHistory.length; i++) {
         const point = allPriceHistory[i];
         
+        // Update min price tracking (NEW)
+        if (point.value < minPrice) {
+          minPrice = point.value;
+          minPriceTimestamp = point.unixTime;
+          minPriceIndex = i;
+        }
+        
+        // Update min price before ATH (NEW) - only if we haven't found a new ATH yet
+        if (point.value < minPriceBeforeAth && point.unixTime <= maxPriceTimestamp) {
+          minPriceBeforeAth = point.value;
+          minPriceBeforeAthTimestamp = point.unixTime;
+        }
+        
         // Update max price if found
         if (point.value > maxPrice) {
           maxPrice = point.value;
           maxPriceTimestamp = point.unixTime;
           maxPriceIndex = i;
+          
+          // Reset minPriceBeforeAth tracking with new ATH (NEW)
+          minPriceBeforeAth = initialPrice;
+          minPriceBeforeAthTimestamp = timeFrom;
+          
+          // Re-scan all previous points to find the minimum before this new ATH (NEW)
+          for (let j = 0; j < i; j++) {
+            if (allPriceHistory[j].value < minPriceBeforeAth) {
+              minPriceBeforeAth = allPriceHistory[j].value;
+              minPriceBeforeAthTimestamp = allPriceHistory[j].unixTime;
+            }
+          }
         }
         
         // Check for 50% drop from INITIAL price (not from ATH)
@@ -325,12 +358,38 @@ const birdeyeService = {
             // Process this batch of data
             for (let i = 0; i < secondPhaseHistory.length; i++) {
               const point = secondPhaseHistory[i];
+              const allHistoryIndex = allPriceHistory.indexOf(point);
+              
+              // Update min price tracking (NEW)
+              if (point.value < minPrice) {
+                minPrice = point.value;
+                minPriceTimestamp = point.unixTime;
+                minPriceIndex = allHistoryIndex;
+              }
+              
+              // Update min price before ATH (NEW) - only if this point is before current ATH
+              if (point.value < minPriceBeforeAth && point.unixTime <= maxPriceTimestamp) {
+                minPriceBeforeAth = point.value;
+                minPriceBeforeAthTimestamp = point.unixTime;
+              }
               
               // Update max price if found
               if (point.value > maxPrice) {
                 maxPrice = point.value;
                 maxPriceTimestamp = point.unixTime;
-                maxPriceIndex = allPriceHistory.indexOf(point);
+                maxPriceIndex = allHistoryIndex;
+                
+                // Reset minPriceBeforeAth tracking with new ATH (NEW)
+                minPriceBeforeAth = initialPrice;
+                minPriceBeforeAthTimestamp = timeFrom;
+                
+                // Re-scan all previous points to find the minimum before this new ATH (NEW)
+                for (let j = 0; j < allHistoryIndex; j++) {
+                  if (allPriceHistory[j].value < minPriceBeforeAth) {
+                    minPriceBeforeAth = allPriceHistory[j].value;
+                    minPriceBeforeAthTimestamp = allPriceHistory[j].unixTime;
+                  }
+                }
               }
               
               // Check for 50% drop from initial price
@@ -368,12 +427,38 @@ const birdeyeService = {
               // Process this batch of data
               for (let i = 0; i < thirdPhaseHistory.length; i++) {
                 const point = thirdPhaseHistory[i];
+                const allHistoryIndex = allPriceHistory.indexOf(point);
+                
+                // Update min price tracking (NEW)
+                if (point.value < minPrice) {
+                  minPrice = point.value;
+                  minPriceTimestamp = point.unixTime;
+                  minPriceIndex = allHistoryIndex;
+                }
+                
+                // Update min price before ATH (NEW) - only if this point is before current ATH
+                if (point.value < minPriceBeforeAth && point.unixTime <= maxPriceTimestamp) {
+                  minPriceBeforeAth = point.value;
+                  minPriceBeforeAthTimestamp = point.unixTime;
+                }
                 
                 // Update max price if found
                 if (point.value > maxPrice) {
                   maxPrice = point.value;
                   maxPriceTimestamp = point.unixTime;
-                  maxPriceIndex = allPriceHistory.indexOf(point);
+                  maxPriceIndex = allHistoryIndex;
+                  
+                  // Reset minPriceBeforeAth tracking with new ATH (NEW)
+                  minPriceBeforeAth = initialPrice;
+                  minPriceBeforeAthTimestamp = timeFrom;
+                  
+                  // Re-scan all previous points to find the minimum before this new ATH (NEW)
+                  for (let j = 0; j < allHistoryIndex; j++) {
+                    if (allPriceHistory[j].value < minPriceBeforeAth) {
+                      minPriceBeforeAth = allPriceHistory[j].value;
+                      minPriceBeforeAthTimestamp = allPriceHistory[j].unixTime;
+                    }
+                  }
                 }
                 
                 // Check for 50% drop from initial price
@@ -401,6 +486,14 @@ const birdeyeService = {
       const percentageGain = initialPrice > 0
         ? ((maxPrice - initialPrice) / initialPrice) * 100
         : 0;
+        
+      // Calculate minimum price drop before ATH (NEW)
+      const minBeforeAthPercentage = initialPrice > 0
+        ? ((minPriceBeforeAth - initialPrice) / initialPrice) * 100
+        : 0;
+      
+      const timeToMinBeforeAthSeconds = minPriceBeforeAthTimestamp - timeFrom;
+      const timeToMinBeforeAthMinutes = timeToMinBeforeAthSeconds / 60;
       
       // Information about price drop
       let dropPercentage = 0;
@@ -461,10 +554,19 @@ const birdeyeService = {
         athTimestamp: maxPriceTimestamp * 1000, // Convert to milliseconds
         percentageGain,
         minutesToATH: timeToATHMinutes,
+        
+        // New minimum price before ATH data
+        minPriceBeforeAth: minPriceBeforeAth,
+        minBeforeAthPercentage,
+        minutesToMinBeforeAth: timeToMinBeforeAthMinutes,
+        minBeforeAthTimestamp: minPriceBeforeAthTimestamp * 1000, // Convert to milliseconds
+        
+        // Other existing fields
         dropPercentage,
         timeToDrop,
         dataPoints: allPriceHistory.length,
         timeToATHFormatted: this.formatTimeToATH(timeToATHMinutes),
+        timeToMinBeforeAthFormatted: this.formatTimeToATH(timeToMinBeforeAthMinutes), // NEW
         earlyDrops: earlyDrops,
         drop50PctDetected,
         drop50PctTimestamp: drop50PctDetected ? drop50PctTimestamp * 1000 : null

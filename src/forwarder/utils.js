@@ -1,8 +1,9 @@
+// src/forwarder/utils.js
 const logger = require('../utils/logger');
 const db = require('../db');
-const { getClient } = require('./client');
+const { getClientForTracker } = require('./clientPool');
 
-// Keep track of which trackers we're monitoring
+// Keep track of monitored trackers with their associated clients
 const monitoredTrackers = new Map();
 
 /**
@@ -28,7 +29,13 @@ async function startMonitoringTracker(trackerName) {
     
     logger.info(`Starting to monitor tracker: ${trackerName}`);
     
-    const client = getClient();
+    // Get the client to use for this tracker
+    const client = getClientForTracker(trackerName);
+    
+    if (!client) {
+      logger.error(`No client available for tracker: ${trackerName}`);
+      return false;
+    }
     
     // Get the entity for this tracker
     logger.debug(`Trying to get entity for tracker: ${trackerName}`);
@@ -46,15 +53,15 @@ async function startMonitoringTracker(trackerName) {
       // Store the tracker info
       monitoredTrackers.set(trackerName, {
         entity,
-        startTime: new Date()
+        startTime: new Date(),
+        clientId: Array.from(require('./clientPool').getAllClients().entries())
+                      .find(([id, c]) => c === client)?.[0] || 'unknown'
       });
       
       logger.info(`Successfully monitoring tracker: ${trackerName}`);
       return true;
     } catch (entityError) {
-      logger.error(`Error getting entity for tracker ${trackerName}: ${entityError.message}`);
-      
-      // Try with username format
+      // Try with username format if failed
       try {
         logger.debug(`Trying with username format for: ${trackerName}`);
         const entity = await client.getEntity(`@${trackerName}`);
@@ -69,7 +76,9 @@ async function startMonitoringTracker(trackerName) {
         // Store the tracker info
         monitoredTrackers.set(trackerName, {
           entity,
-          startTime: new Date()
+          startTime: new Date(),
+          clientId: Array.from(require('./clientPool').getAllClients().entries())
+                      .find(([id, c]) => c === client)?.[0] || 'unknown'
         });
         
         logger.info(`Successfully monitoring tracker: @${trackerName}`);
@@ -150,6 +159,7 @@ function dumpTrackerState() {
     logger.debug(`Tracker: ${name}`);
     logger.debug(`Entity ID: ${tracker.entity.id}`);
     logger.debug(`Username: ${tracker.entity.username}`);
+    logger.debug(`Client ID: ${tracker.clientId}`);
     logger.debug(`Start time: ${tracker.startTime}`);
     logger.debug('----------------------------');
   }

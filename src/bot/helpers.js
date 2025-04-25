@@ -23,6 +23,13 @@ const helpers = {
       }]]
     };
     
+    // Get forwarder usernames from config
+    const forwarder1Username = config.telegram.forwarders && config.telegram.forwarders[0] ? 
+      config.telegram.forwarders[0].forwarderUsername : 'YourForwarderUsername';
+    
+    const forwarder2Username = config.telegram.forwarders && config.telegram.forwarders[1] ? 
+      config.telegram.forwarders[1].forwarderUsername : 'YourBackupForwarderUsername';
+    
     // Send message without any parse_mode to avoid formatting issues
     bot.sendMessage(
       chatId,
@@ -30,10 +37,11 @@ const helpers = {
       `Please follow these steps:\n\n` +
       `1️⃣ Add me (@${config.telegram.botUsername}) to your group\n` +
       `2️⃣ Add ${tracker} to the same group\n` +
-      `3️⃣ Add our forwarder account (@${config.telegram.forwarderUsername || 'YourForwarderUsername'}) to the group\n` +
-      `4️⃣ Make both me and the forwarder admin in the group (we need to read messages)\n` +
+      `3️⃣ Add our forwarder accounts (@${forwarder1Username} and @${forwarder2Username}) to the group\n` +
+      `4️⃣ Make me and both forwarders admin in the group (we need to read messages)\n` +
       `5️⃣ Send /setup ${trackerName} in the group to activate monitoring\n\n` +
-      `Once set up, I'll alert you when multiple wallets buy or sell the same coin!`,
+      `Once set up, I'll alert you when multiple wallets buy or sell the same coin!\n\n` +
+      `Note: Adding both forwarder accounts ensures reliable tracking even if one account experiences connectivity issues.`,
       {
         // No parse_mode here
         reply_markup: addToGroupButton
@@ -44,14 +52,13 @@ const helpers = {
       // Ultimate fallback with minimal formatting
       bot.sendMessage(
         chatId,
-        `I'll monitor ${tracker} for you. Add me to your group, then type /setup ${trackerName} there.`,
+        `I'll monitor ${tracker} for you. Add me and both forwarders (@${forwarder1Username} and @${forwarder2Username}) to your group, then type /setup ${trackerName} there.`,
         {
           reply_markup: addToGroupButton
         }
       );
     });
   },
-
   /**
    * Setup a cleaning interval for old transactions
    * @param {Function} cleanFunction - The cleaning function to call

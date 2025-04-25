@@ -1,20 +1,20 @@
+// src/forwarder/index.js
 require('dotenv').config();
 const logger = require('../utils/logger');
 const db = require('../db');
-const { initClient, connectClient, disconnectClient } = require('./client');
+const { connectAllClients, disconnectAllClients } = require('./clientPool');
 const { setupMessageHandler } = require('./messageHandler');
-const { monitoredTrackers, updateMonitoredTrackers } = require('./utils');
+const { updateMonitoredTrackers } = require('./utils');
 
 /**
  * Initialize and start the forwarder
  */
 async function startForwarder() {
-  logger.info('Starting Multi-Tracker Forwarder...');
+  logger.info('Starting Multi-Tracker Forwarder with Client Pool...');
   
   try {
-    // Initialize and connect Telegram client
-    initClient();
-    await connectClient();
+    // Initialize and connect all Telegram clients
+    await connectAllClients();
     
     // Set up the global message handler
     setupMessageHandler();
@@ -28,7 +28,7 @@ async function startForwarder() {
     // Periodically check for new trackers to monitor
     const updateInterval = setInterval(updateMonitoredTrackers, 60000); // Check every minute
     
-    logger.info('Forwarder is now running.');
+    logger.info('Forwarder is now running with client pool.');
     
     return {
       stop: async () => {
@@ -49,10 +49,10 @@ async function stopForwarder() {
   logger.info('Stopping forwarder...');
   
   // Clear all trackers
-  monitoredTrackers.clear();
+  require('./utils').monitoredTrackers.clear();
   
   // Disconnect from Telegram
-  await disconnectClient();
+  await disconnectAllClients();
   
   logger.info('Forwarder stopped.');
 }

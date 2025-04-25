@@ -4,9 +4,24 @@ module.exports = {
   telegram: {
     botToken: process.env.BOT_TOKEN,
     botUsername: process.env.BOT_USERNAME || 'your_bot_username',
-    apiId: parseInt(process.env.TELEGRAM_API_ID || '0'),
-    apiHash: process.env.TELEGRAM_API_HASH || '',
-    forwarderPhoneNumber: process.env.FORWARDER_PHONE_NUMBER || ''
+    forwarders: [
+      {
+        id: 'forwarder1',
+        forwarderUsername: process.env.FORWARDER_USERNAME,
+        phoneNumber: process.env.FORWARDER1_PHONE_NUMBER,
+        apiId: parseInt(process.env.TELEGRAM_API_ID || '0'),
+        apiHash: process.env.TELEGRAM_API_HASH || '',
+        sessionPath: 'telegram-session-1.txt'
+      },
+      {
+        id: 'forwarder2',
+        forwarderUsername: process.env.FORWARDER_USERNAME_2,
+        phoneNumber: process.env.FORWARDER2_PHONE_NUMBER_BACKUP,
+        apiId: parseInt(process.env.TELEGRAM_API_ID_BACKUP || '0'),
+        apiHash: process.env.TELEGRAM_API_HASH_BACKUP || '',
+        sessionPath: 'telegram-session-2.txt'
+      }
+    ]
   },
   confluence: {
     minWallets: parseInt(process.env.MIN_WALLETS_FOR_CONFLUENCE || '2', 10),
