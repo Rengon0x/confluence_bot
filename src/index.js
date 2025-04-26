@@ -5,6 +5,8 @@ const { startBot } = require('./bot');
 const { startForwarder } = require('./forwarder');
 const confluenceService = require('./services/confluenceService'); 
 const transactionService = require('./db/services/transactionService');
+const queueManager = require('./services/queueService');
+const performanceMonitor = require('./utils/performanceMonitor');
 
 /**
  * Main application entry point
@@ -30,18 +32,69 @@ async function startApp() {
 
     // Setup periodic cleanup for transactions
     setInterval(async () => {
-      // Nettoyage MongoDB - toutes les heures
+      // MongoDB cleanup - every hour
       await transactionService.cleanupOldTransactions(48);
       
-      // Nettoyage du cache - toutes les 10 minutes
-      confluenceService.cleanOldTransactions();
+      // Cache cleanup - every 10 minutes
+      await confluenceService.cleanOldTransactions();
       
-      // Vérifier et journaliser l'utilisation des ressources
-      const cacheStats = confluenceService.estimateCacheSize();
+      // Check and log resource usage
+      const cacheStats = await confluenceService.estimateSize();
       const dbStats = await transactionService.getCollectionSize();
       
-      logger.info(`Resource usage - Cache: ${cacheStats.estimatedSizeMB.toFixed(2)}MB (${cacheStats.totalEntries} entries), MongoDB: ${dbStats ? dbStats.sizeMB.toFixed(2) + 'MB' : 'unknown'}`);
+      // Get queue stats
+      const queueStats = queueManager.getAllQueueStats();
+      const queueGroups = Object.keys(queueStats).length;
+      const queuePending = Object.values(queueStats).reduce((sum, stats) => sum + stats.length, 0);
+      const queueProcessed = Object.values(queueStats).reduce((sum, stats) => sum + stats.processed, 0);
+      
+      logger.info(`Resource usage - Cache: ${cacheStats.estimatedSizeMB.toFixed(2)}MB (${cacheStats.totalEntries} entries), MongoDB: ${dbStats ? dbStats.sizeMB.toFixed(2) + 'MB' : 'unknown'}, Queues: ${queueGroups} groups, ${queuePending} pending, ${queueProcessed} processed`);
+      
+      // Generate performance report every hour
+      const currentHour = new Date().getHours();
+      const lastHour = new Date(Date.now() - 3600000).getHours();
+      if (currentHour !== lastHour) {
+        // Generate a full performance report at the top of each hour
+        performanceMonitor.generatePerformanceReport();
+      }
     }, 600000); // 10 minutes
+    
+    // Setup detailed performance monitoring for slow operations
+    setInterval(() => {
+      // Check if any slow operations have happened in the last minute
+      const confluenceMetrics = performanceMonitor.metrics.confluenceDetection;
+      const recentConfluenceOps = confluenceMetrics.times
+        .filter(t => Date.now() - t.timestamp < 60000) // Last minute
+        .sort((a, b) => b.time - a.time); // Slowest first
+        
+      if (recentConfluenceOps.length > 0) {
+        const slowOps = recentConfluenceOps.filter(op => op.time > 1000); // > 1 second
+        
+        if (slowOps.length > 0) {
+          // We found slow operations
+          const slowestOp = slowOps[0];
+          logger.warn(`⏱️ Performance Alert: Detected ${slowOps.length} slow confluence operations in the last minute. Slowest: ${slowestOp.operation} (${slowestOp.time.toFixed(2)}ms)`);
+          
+          // Suggest optimization if there are repeated slow operations for the same group
+          const groupCounts = {};
+          for (const op of slowOps) {
+            const groupMatch = op.operation.match(/check_group_([^_]+)/);
+            if (groupMatch) {
+              const groupId = groupMatch[1];
+              groupCounts[groupId] = (groupCounts[groupId] || 0) + 1;
+            }
+          }
+          
+          const problematicGroups = Object.entries(groupCounts)
+            .filter(([_, count]) => count > 2)
+            .map(([groupId]) => groupId);
+            
+          if (problematicGroups.length > 0) {
+            logger.warn(`Consider optimizing data for group(s): ${problematicGroups.join(', ')}`);
+          }
+        }
+      }
+    }, 60000); // Check every minute
     
     logger.info('Application successfully started');
     
@@ -51,6 +104,8 @@ async function startApp() {
       if (forwarder && forwarder.stop) {
         await forwarder.stop();
       }
+      // Shut down the queue manager
+      queueManager.shutdown();
       process.exit(0);
     });
     
@@ -59,6 +114,8 @@ async function startApp() {
       if (forwarder && forwarder.stop) {
         await forwarder.stop();
       }
+      // Shut down the queue manager
+      queueManager.shutdown();
       process.exit(0);
     });
     

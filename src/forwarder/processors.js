@@ -4,6 +4,7 @@ const config = require('../config/config');
 const parserService = require('../services/parserService');
 const confluenceService = require('../services/confluenceService');
 const telegramService = require('../services/telegramService');
+const queueManager = require('../services/queueService');
 const db = require('../db');
 
 /**
@@ -58,40 +59,28 @@ async function processMessage(trackerName, message) {
     
     logger.info(`Extracted transaction: ${transaction.type.toUpperCase()} ${transaction.amount} ${currentToken}`);
     
-    // Process for each group
+    // Process for each group - use the queue system for processing isolation
     for (const group of groups) {
       try {
-        // Add the transaction to the confluence detection service with group ID
-        await confluenceService.addTransaction(transaction, group.id);
-        
-        // Check for confluences for this group
-        const allConfluences = confluenceService.checkConfluences(group.id);
-        
-        // Filter to only show confluences related to the current token
-        const relevantConfluences = allConfluences.filter(confluence => 
-          confluence.coin === currentToken || 
-          (currentTokenAddress && confluence.coinAddress === currentTokenAddress)
-        );
-        
-        // Log the filtering
-        if (allConfluences.length > relevantConfluences.length) {
-          logger.debug(`Filtered ${allConfluences.length} confluences down to ${relevantConfluences.length} relevant to token ${currentToken}`);
-        }
-        
-        // If relevant confluences are detected, send alerts
-        if (relevantConfluences && relevantConfluences.length > 0) {
-          for (const confluence of relevantConfluences) {
-            // Format the message
-            const message = telegramService.formatConfluenceMessage(confluence);
-            
-            // Send the alert via bot
-            await sendConfluenceAlert(group.id, message);
-            
-            logger.info(`Confluence alert sent for ${confluence.coin} in group ${group.id}: ${confluence.wallets.length} wallets`);
+        // Create an extended transaction with token filtering info for confluence detection
+        const queuedTransaction = {
+          ...transaction,
+          // Add metadata for confluence filtering
+          _meta: {
+            trackerName,
+            currentToken,
+            currentTokenAddress,
+            // Store queue timestamp for analytics
+            queuedAt: Date.now()
           }
-        }
+        };
+        
+        // Add the transaction to the group-specific queue
+        await queueManager.addTransaction(queuedTransaction, group.id);
+        
+        logger.debug(`Queued transaction for group ${group.id}: ${transaction.type} ${transaction.amount} ${currentToken}`);
       } catch (error) {
-        logger.error(`Error processing for group ${group.id}: ${error.message}`);
+        logger.error(`Error queueing transaction for group ${group.id}: ${error.message}`);
       }
     }
   } catch (error) {
@@ -99,27 +88,6 @@ async function processMessage(trackerName, message) {
   }
 }
 
-/**
- * Send a confluence alert to a group
- * @param {string} groupId - ID of the group
- * @param {string} message - Message content
- */
-async function sendConfluenceAlert(groupId, message) {
-  try {
-    // Send the message using the bot API
-    await axios.post(`https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`, {
-      chat_id: groupId,
-      text: message,
-      parse_mode: 'HTML'
-    });
-    
-    logger.debug(`Alert sent to group: ${groupId}`);
-  } catch (error) {
-    logger.error(`Error sending alert to group ${groupId}: ${error.message}`);
-  }
-}
-
 module.exports = {
-  processMessage,
-  sendConfluenceAlert
+  processMessage
 };

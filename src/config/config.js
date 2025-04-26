@@ -30,6 +30,12 @@ module.exports = {
   mongodb: {
     uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/confluence-bot'
   },
+  redis: {
+    uri: process.env.REDIS_URI || 'redis://localhost:6379',
+    enabled: process.env.USE_REDIS === 'true' || false,
+    transactionsCachePrefix: 'conflubot:transactions:',
+    confluencesCachePrefix: 'conflubot:confluences:'
+  },
   logging: {
     level: process.env.LOG_LEVEL || 'info'
   },
