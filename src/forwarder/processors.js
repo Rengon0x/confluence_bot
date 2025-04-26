@@ -44,30 +44,32 @@ async function processMessage(trackerName, message) {
       logger.debug(`Message entity types: ${JSON.stringify(message.entities)}`);
     }
     
-    // Parse the message to extract transaction information
-    const transaction = parserService.parseTrackerMessage(message);
-    
-    // If it's not a buy or sell transaction, ignore
-    if (!transaction || (transaction.type !== 'buy' && transaction.type !== 'sell')) {
-      logger.debug('Message ignored - not a valid transaction');
-      return;
-    }
-    
-    // Keep track of the current token to filter confluences
-    const currentToken = transaction.coin;
-    const currentTokenAddress = transaction.coinAddress;
-    
-    logger.info(`Extracted transaction: ${transaction.type.toUpperCase()} ${transaction.amount} ${currentToken}`);
-    
-    // Process for each group - use the queue system for processing isolation
+    // Process for each group
     for (const group of groups) {
       try {
+        // Parse the message using the appropriate parser based on tracker type
+        const trackerType = group.trackerType || 'cielo'; // Default to cielo for backward compatibility
+        const transaction = parserService.parseTrackerMessage(message, trackerType);
+        
+        // If it's not a buy or sell transaction, ignore
+        if (!transaction || (transaction.type !== 'buy' && transaction.type !== 'sell')) {
+          logger.debug(`Message ignored - not a valid transaction for tracker type ${trackerType}`);
+          continue;
+        }
+        
+        // Keep track of the current token to filter confluences
+        const currentToken = transaction.coin;
+        const currentTokenAddress = transaction.coinAddress;
+        
+        logger.info(`Extracted transaction from ${trackerType} tracker: ${transaction.type.toUpperCase()} ${transaction.amount} ${currentToken}`);
+        
         // Create an extended transaction with token filtering info for confluence detection
         const queuedTransaction = {
           ...transaction,
           // Add metadata for confluence filtering
           _meta: {
             trackerName,
+            trackerType,
             currentToken,
             currentTokenAddress,
             // Store queue timestamp for analytics
@@ -80,7 +82,7 @@ async function processMessage(trackerName, message) {
         
         logger.debug(`Queued transaction for group ${group.id}: ${transaction.type} ${transaction.amount} ${currentToken}`);
       } catch (error) {
-        logger.error(`Error queueing transaction for group ${group.id}: ${error.message}`);
+        logger.error(`Error processing message for group ${group.id}: ${error.message}`);
       }
     }
   } catch (error) {

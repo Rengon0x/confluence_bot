@@ -22,16 +22,17 @@ const startCommand = {
         `*What this bot does:*\n` +
         `This bot detects when multiple wallets buy or sell the same token (confluence) and sends alerts to help you spot trending tokens early.\n\n` +
         
-        `*Setup this group in 4 easy steps:*\n` +
+        `*Setup this group in 5 easy steps:*\n` +
         `1️⃣ Make sure this bot is an admin in the group\n` +
         `2️⃣ Add our forwarder account @${forwarder1Username} and make it admin\n` +
-        `3️⃣ Use \`/setup @YourTrackerName\` (e.g., \`/setup @CieloTrackerPrivate_bot\`)\n` +
-        `4️⃣ Wait for confluence alerts to appear!\n\n` +
+        `3️⃣ Use the \`/setup\` command\n` +
+        `4️⃣ Enter your tracker's username when prompted\n` +
+        `5️⃣ Select the tracker type (Cielo, Defined, or Ray)\n\n` +
         
         `*Note:* We recommend also adding our backup forwarder @${forwarder2Username} to your group. ` +
         `This serves as a fallback system if the main forwarder @${forwarder1Username} experiences connectivity issues or becomes temporarily unavailable.\n\n` +
   
-        `*Tips:*You can monitor multiple wallet trackers in the same group by using \`/setup\` for each one separately. This increases your chances of finding confluences as the bot combines data from all your trackers!\n\n` +
+        `*Tips:* You can monitor multiple wallet trackers in the same group by using \`/setup\` for each one separately. This increases your chances of finding confluences as the bot combines data from all your trackers!\n\n` +
         
         `Type /help for the complete guide and all available commands.`,
         { parse_mode: 'Markdown' }
@@ -47,17 +48,16 @@ const startCommand = {
       `This bot monitors wallet trackers and alerts you when multiple wallets buy or sell the same token within a specific time period (confluence), helping you spot trending tokens early.\n\n` +
       
       `*How to set up:*\n` +
-      `1️⃣ Tell me which wallet tracker to monitor by typing its name with @ symbol\n` +
-      `   Example: @CieloTrackerPrivate_bot\n` +
-      `2️⃣ Add me to your Telegram group\n` +
-      `3️⃣ Add the forwarder @${forwarder1Username} to the same group\n` +
-      `4️⃣ Make both of us admins in the group\n` +
-      `5️⃣ Type /setup in the group to activate monitoring\n\n` +
+      `1️⃣ Add me to your Telegram group\n` +
+      `2️⃣ Add the forwarder @${forwarder1Username} to the same group\n` +
+      `3️⃣ Make both of us admins in the group\n` +
+      `4️⃣ Type /setup in the group\n` +
+      `5️⃣ Follow the prompts to enter your tracker name and select its type\n\n` +
       
       `*Note:* We recommend also adding our backup forwarder @${forwarder2Username} to your group. ` +
       `This serves as a fallback system if the main forwarder @${forwarder1Username} experiences connectivity issues or becomes temporarily unavailable.\n\n` +
 
-      `*Tips:*You can monitor multiple wallet trackers in the same group by using \`/setup\` for each one separately. This increases your chances of finding confluences as the bot combines data from all your trackers!\n\n` +
+      `*Tips:* You can monitor multiple wallet trackers in the same group by using \`/setup\` for each one separately. This increases your chances of finding confluences as the bot combines data from all your trackers!\n\n` +
       
       `Type /help anytime to see the complete guide and all available commands.`,
       { parse_mode: 'Markdown' }

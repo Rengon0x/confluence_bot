@@ -1,5 +1,6 @@
 // src/bot/commands/commandManager.js
 const logger = require('../../utils/logger');
+const config = require('../../config/config');
 
 /**
  * Classe pour gérer les commandes du bot
@@ -9,6 +10,27 @@ class CommandManager {
     this.commands = new Map();
     this.adminCommands = new Map();
     this.admins = new Set(); // Ensemble des IDs admin
+  }
+
+  /**
+   * Check if a command is directed at this bot
+   * @param {Object} msg - Message object
+   * @returns {boolean} - True if the command should be processed
+   */
+  shouldProcessCommand(msg) {
+    if (!msg.text || !msg.text.startsWith('/')) return false;
+    
+    // Extract command parts
+    const commandParts = msg.text.split(' ')[0].split('@');
+    const command = commandParts[0];
+    const mentionedBot = commandParts[1];
+    
+    // If no bot is mentioned, process the command
+    if (!mentionedBot) return true;
+    
+    // If a bot is mentioned, only process if it's this bot
+    const botUsername = config.telegram.botUsername.replace('@', '');
+    return mentionedBot.toLowerCase() === botUsername.toLowerCase();
   }
 
   /**
@@ -88,6 +110,12 @@ class CommandManager {
     for (const command of this.commands.values()) {
       bot.onText(command.regex, (msg, match) => {
         try {
+          // Only process if the command is directed at this bot
+          if (!this.shouldProcessCommand(msg)) {
+            logger.debug(`Ignoring command ${command.name} directed at another bot`);
+            return;
+          }
+          
           logger.info(`Command ${command.name} executed by user ${msg.from.id}`);
           command.handler(bot, msg, match);
         } catch (error) {
@@ -101,6 +129,12 @@ class CommandManager {
     for (const command of this.adminCommands.values()) {
       bot.onText(command.regex, (msg, match) => {
         try {
+          // Only process if the command is directed at this bot
+          if (!this.shouldProcessCommand(msg)) {
+            logger.debug(`Ignoring admin command ${command.name} directed at another bot`);
+            return;
+          }
+          
           // Vérifier si l'utilisateur est admin
           if (!this.isAdmin(msg.from.id)) {
             bot.sendMessage(msg.chat.id, "Sorry, only admins can use this command.");

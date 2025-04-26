@@ -1,11 +1,10 @@
 const trackerService = require('./trackerService');
 const groupService = require('./groupService');
+const transactionService = require('./transactionService');
 const logger = require('../../utils/logger');
 
 /**
- * Service for coordinating tracker and group operations
- * Note: No longer works with a dedicated "setups" collection,
- * as trackers now directly reference their groups.
+ * Service for coordinating tracker and group operations with tracker type
  */
 const setupService = {
   /**
@@ -13,17 +12,18 @@ const setupService = {
    * @param {string} trackerName - Name of the tracker
    * @param {string} groupId - ID of the Telegram group
    * @param {string} groupName - Name of the Telegram group
+   * @param {string} trackerType - Type of the tracker ('cielo', 'defined', 'ray')
    * @returns {Promise<boolean>} Success status
    */
-  async registerTracking(trackerName, groupId, groupName) {
+  async registerTracking(trackerName, groupId, groupName, trackerType = 'cielo') {
     try {
       // Find or create group first
       const group = await groupService.findOrCreate(groupId, groupName);
       
-      // Find or create tracker specific to this group
-      const tracker = await trackerService.findOrCreate(trackerName, groupId);
+      // Find or create tracker specific to this group with type
+      const tracker = await trackerService.findOrCreate(trackerName, groupId, trackerType);
       
-      logger.info(`Registered tracking for ${trackerName} in group ${groupName}`);
+      logger.info(`Registered tracking for ${trackerName} (${trackerType}) in group ${groupName}`);
       return true;
     } catch (error) {
       logger.error(`Error in setupService.registerTracking: ${error.message}`);
@@ -32,7 +32,7 @@ const setupService = {
   },
 
   /**
-   * Remove tracking for a tracker in a group
+   * Remove tracking for a tracker in a group and clean up associated data
    * @param {string} trackerName - Name of the tracker
    * @param {string} groupId - ID of the Telegram group
    * @returns {Promise<boolean>} Success status
@@ -47,18 +47,85 @@ const setupService = {
         return false;
       }
       
+      // Delete all transactions associated with this tracker in this group
+      const deletedTransactions = await this.cleanupTrackerData(trackerName, groupId);
+      
       // Delete the tracker
       const success = await trackerService.delete(trackerName, groupId);
       
       if (success) {
         const group = await groupService.findByGroupId(groupId);
         logger.info(`Removed tracking: ${trackerName} from group ${group ? group.groupName : groupId}`);
+        logger.info(`Cleaned up ${deletedTransactions} transactions associated with this tracker`);
       }
       
       return success;
     } catch (error) {
       logger.error(`Error in setupService.removeTracking: ${error.message}`);
       return false;
+    }
+  },
+
+  /**
+   * Clean up all data associated with a tracker in a specific group
+   * @param {string} trackerName - Name of the tracker
+   * @param {string} groupId - ID of the Telegram group
+   * @returns {Promise<number>} Number of transactions deleted
+   */
+  async cleanupTrackerData(trackerName, groupId) {
+    try {
+      // Delete all transactions from this tracker in this group
+      const result = await transactionService.deleteTrackerTransactions(trackerName, groupId);
+      
+      // Clean up cached data for this tracker
+      await this.cleanupCachedData(trackerName, groupId);
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error in setupService.cleanupTrackerData: ${error.message}`);
+      return 0;
+    }
+  },
+
+  /**
+   * Clean up cached data for a tracker in a specific group
+   * @param {string} trackerName - Name of the tracker
+   * @param {string} groupId - ID of the Telegram group
+   */
+  async cleanupCachedData(trackerName, groupId) {
+    try {
+      const confluenceService = require('../../services/confluenceService');
+      
+      // Get all cache keys
+      const keys = await confluenceService.transactionsCache.keys();
+      
+      // Filter keys related to this group
+      const groupKeys = keys.filter(key => key.startsWith(`${groupId}_`));
+      
+      // Check each key for transactions from the specified tracker
+      for (const key of groupKeys) {
+        const transactions = await confluenceService.transactionsCache.get(key);
+        
+        if (transactions && Array.isArray(transactions)) {
+          // Filter out transactions from the specified tracker
+          const filteredTransactions = transactions.filter(
+            tx => tx.walletName.toLowerCase() !== trackerName.toLowerCase()
+          );
+          
+          // If all transactions were from this tracker, delete the key
+          if (filteredTransactions.length === 0) {
+            await confluenceService.transactionsCache.del(key);
+          }
+          // Otherwise, update with filtered transactions
+          else if (filteredTransactions.length !== transactions.length) {
+            await confluenceService.transactionsCache.set(key, filteredTransactions);
+          }
+        }
+      }
+      
+      logger.info(`Cleaned up cached data for tracker ${trackerName} in group ${groupId}`);
+    } catch (error) {
+      logger.error(`Error in setupService.cleanupCachedData: ${error.message}`);
     }
   },
 
@@ -75,6 +142,7 @@ const setupService = {
       return trackers.map(tracker => ({
         trackerId: tracker._id,
         trackerName: tracker.name,
+        type: tracker.type || 'cielo', // Default to cielo for backward compatibility
         active: tracker.active,
         createdAt: tracker.createdAt
       }));
@@ -103,7 +171,8 @@ const setupService = {
             groups.push({
               id: group.groupId,
               name: group.groupName,
-              settings: group.settings
+              settings: group.settings,
+              trackerType: tracker.type || 'cielo'
             });
           }
         }
@@ -127,7 +196,7 @@ const setupService = {
       let allSuccessful = true;
       
       for (const tracker of trackers) {
-        const success = await trackerService.updateStatus(tracker._id, false);
+        const success = await this.removeTracking(tracker.name, groupId);
         if (!success) allSuccessful = false;
       }
       

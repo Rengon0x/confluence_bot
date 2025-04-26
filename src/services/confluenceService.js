@@ -247,7 +247,9 @@ async addTransaction(transaction, groupId = 'default') {
       const groupKeys = keys.filter(key => key.startsWith(`${groupId}_`));
       
       // Debug log for monitoring
-      logger.debug(`Checking confluences for group ${groupId}, found ${groupKeys.length} keys in cache`);
+      if (groupKeys.length > 100) {
+        logger.warn(`Large number of cache keys for group ${groupId}: ${groupKeys.length} keys`);
+      }
       
       // Optimization: retrieve all transactions at once
       const keyTransactionMap = {};
@@ -294,11 +296,6 @@ async addTransaction(transaction, groupId = 'default') {
         const hasNewTransactions = transactions.some(tx => 
           new Date(tx.timestamp) > startupTime
         );
-
-        if (!hasNewTransactions) {
-          logger.debug(`Skipping key ${key} - no new transactions since bot startup`);
-          continue;
-        }
         
         // Get coin name from transactions if missing
         if (!coin && coinAddress && transactions.length > 0) {
@@ -462,7 +459,7 @@ async addTransaction(transaction, groupId = 'default') {
       
       // If we have few cached transactions but lots of older ones, we might need to load more data
       if (allTransactions.length === 0 || (totalWalletCount >= minWallets && allTransactions.length < 10)) {
-        logger.debug(`Fetching additional transactions from MongoDB for token ${coin || coinAddress} in group ${groupId}`);
+        //logger.debug(`Fetching additional transactions from MongoDB for token ${coin || coinAddress} in group ${groupId}`);
         
         // Fetch from MongoDB to fill in details not in cache
         try {
@@ -476,10 +473,6 @@ async addTransaction(transaction, groupId = 'default') {
             additionalTransactions = await transactionService.getRecentTransactionsByCoin(
               groupId, coin, config.confluence.windowMinutes
             );
-          }
-          
-          if (additionalTransactions.length > 0) {
-            logger.debug(`Loaded ${additionalTransactions.length} additional transactions from MongoDB`);
           }
         } catch (dbError) {
           logger.warn(`Error loading additional transactions: ${dbError.message}`);
@@ -506,7 +499,6 @@ async addTransaction(transaction, groupId = 'default') {
       if (combinedTransactions.length === 0) {
         // If we still have no transactions but have metadata, create placeholder transactions
         if (olderBuyData || olderSellData) {
-          logger.debug(`Using metadata to represent older transactions for ${coin || coinAddress}`);
           
           if (olderBuyData) {
             olderBuyData.wallets.forEach(wallet => {
@@ -543,7 +535,7 @@ async addTransaction(transaction, groupId = 'default') {
       // Add better logging for token identification
       const buyCount = combinedTransactions.filter(tx => tx.type === 'buy').length;
       const sellCount = combinedTransactions.filter(tx => tx.type === 'sell').length;
-      logger.debug(`Processing token ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${buyCount} buy txs, ${sellCount} sell txs, ${totalWalletCount} unique wallets`);
+      //logger.debug(`Processing token ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${buyCount} buy txs, ${sellCount} sell txs, ${totalWalletCount} unique wallets`);
       
       // Skip if still no transactions
       if (combinedTransactions.length === 0) return;
@@ -553,7 +545,7 @@ async addTransaction(transaction, groupId = 'default') {
         ? `${groupId}_addr_${coinAddress}` // Remove transaction type from key
         : `${groupId}_name_${coin}`;
 
-      logger.debug(`Using confluence key: ${confluenceKey} based on ${coinAddress ? 'address' : 'name'}`);
+      //logger.debug(`Using confluence key: ${confluenceKey} based on ${coinAddress ? 'address' : 'name'}`);
         
       // Get existing confluence for this token
       const existingConfluence = await this.detectedConfluences.get(confluenceKey) || { wallets: [] };
@@ -698,8 +690,6 @@ async addTransaction(transaction, groupId = 'default') {
       // Check if enough different wallets made a transaction
       const totalUniqueWallets = wallets.length;
       
-      logger.debug(`Token ${coin || coinAddress}: ${totalUniqueWallets} unique wallets, minimum required: ${minWallets}`);
-      
       if (totalUniqueWallets >= minWallets) {
         const isUpdate = existingConfluence.wallets.length > 0;
         
@@ -741,12 +731,10 @@ async addTransaction(transaction, groupId = 'default') {
           // Only add to results if at least one wallet was updated
           if (wallets.some(w => w.isUpdated)) {
             confluences.push(confluence);
-            logger.info(`Unified confluence update detected for ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)${confluence.is48hWindow ? ' [48h window]' : ''}`);
           }
         } else {
           // New confluence
           confluences.push(confluence);
-          logger.info(`Unified confluence detected for ${coin || 'UNKNOWN'} (address: ${coinAddress || 'none'}): ${totalUniqueWallets} wallets (${buyWallets} buy, ${sellWallets} sell)${confluence.is48hWindow ? ' [48h window]' : ''}`);
         }
       }
     } catch (error) {

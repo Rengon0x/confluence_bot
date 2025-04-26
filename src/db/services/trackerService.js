@@ -4,7 +4,7 @@ const TrackerModel = require('../models/tracker');
 const logger = require('../../utils/logger');
 
 /**
- * Service for handling tracker-related database operations
+ * Service for handling tracker-related database operations with type support
  */
 const trackerService = {
   /**
@@ -20,9 +20,10 @@ const trackerService = {
    * Find or create a tracker by name and groupId
    * @param {string} name - The tracker name
    * @param {string} groupId - The group ID this tracker belongs to
+   * @param {string} type - The tracker type ('cielo', 'defined', 'ray')
    * @returns {Promise<Object>} The tracker document
    */
-  async findOrCreate(name, groupId) {
+  async findOrCreate(name, groupId, type = 'cielo') {
     try {
       const collection = await this.getCollection();
       
@@ -31,12 +32,13 @@ const trackerService = {
       
       // If it doesn't exist, create it
       if (!tracker) {
-        logger.info(`Creating new tracker: ${name} for group ${groupId}`);
+        logger.info(`Creating new tracker: ${name} (${type}) for group ${groupId}`);
         const now = new Date();
         
         const result = await collection.insertOne({
           name,
           groupId,
+          type,
           active: TrackerModel.defaults.active,
           createdAt: now,
           updatedAt: now
@@ -46,10 +48,19 @@ const trackerService = {
           _id: result.insertedId,
           name,
           groupId,
+          type,
           active: TrackerModel.defaults.active,
           createdAt: now,
           updatedAt: now
         };
+      } else if (!tracker.type || tracker.type !== type) {
+        // Update the type if it's different or missing
+        await collection.updateOne(
+          { _id: tracker._id },
+          { $set: { type, updatedAt: new Date() } }
+        );
+        tracker.type = type;
+        tracker.updatedAt = new Date();
       }
       
       return tracker;

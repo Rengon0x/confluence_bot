@@ -26,8 +26,8 @@ module.exports = {
   // Helper methods for easy access
   
   // Register tracking setup
-  async registerTracking(trackerName, groupId, groupName) {
-    return setupService.registerTracking(trackerName, groupId, groupName);
+  async registerTracking(trackerName, groupId, groupName, trackerType = 'cielo') {
+    return setupService.registerTracking(trackerName, groupId, groupName, trackerType);
   },
   
   // Remove tracking setup

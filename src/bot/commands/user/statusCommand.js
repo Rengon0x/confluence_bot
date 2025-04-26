@@ -24,7 +24,7 @@ const statusCommand = {
     
     // Formater une liste de tous les trackers surveillés
     const trackerList = trackers.map(t => 
-      `• *${t.trackerName}*: ${t.active ? '✅ Active' : '❌ Inactive'}`
+      `• *${t.trackerName}* (${t.trackerType || 'cielo'}): ${t.active ? '✅ Active' : '❌ Inactive'}`
     ).join('\n');
     
     bot.sendMessage(

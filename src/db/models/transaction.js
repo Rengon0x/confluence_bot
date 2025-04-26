@@ -26,6 +26,10 @@ module.exports = {
       { key: { groupId: 1, type: 1, coin: 1 }, name: 'group_type_coin_lookup' },
       { key: { groupId: 1, type: 1, coinAddress: 1 }, name: 'group_type_coinaddress_lookup' },
       
+      // New indexes for queries without type
+      { key: { groupId: 1, coinAddress: 1, timestamp: 1 }, name: 'group_coinaddress_time_lookup' },
+      { key: { groupId: 1, coin: 1, timestamp: 1 }, name: 'group_coin_time_lookup' },
+      
       // Indexes for aggregation queries
       { key: { walletName: 1, groupId: 1 }, name: 'wallet_group_lookup' },
       { key: { groupId: 1, walletName: 1, timestamp: -1 }, name: 'recent_wallet_lookup' }

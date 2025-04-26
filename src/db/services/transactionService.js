@@ -51,6 +51,50 @@ async storeTransaction(transaction, groupId) {
     }
   },
 
+    /**
+   * Delete all transactions associated with a tracker in a specific group
+   * @param {string} trackerName - The tracker name
+   * @param {string} groupId - The group ID
+   * @returns {Promise<number>} Number of transactions deleted
+   */
+    async deleteTrackerTransactions(trackerName, groupId) {
+      try {
+        const collection = await this.getCollection();
+        
+        // Delete all transactions from this tracker in this group
+        const result = await collection.deleteMany({
+          groupId: groupId,
+          walletName: { $regex: new RegExp(`^${trackerName}`, 'i') }
+        });
+        
+        logger.info(`Deleted ${result.deletedCount} transactions for tracker ${trackerName} in group ${groupId}`);
+        return result.deletedCount;
+      } catch (error) {
+        logger.error(`Error in transactionService.deleteTrackerTransactions: ${error.message}`);
+        return 0;
+      }
+    },
+
+    /**
+   * Delete all transactions for a specific group
+   * @param {string} groupId - The group ID
+   * @returns {Promise<number>} Number of transactions deleted
+   */
+    async deleteGroupTransactions(groupId) {
+      try {
+        const collection = await this.getCollection();
+        
+        const result = await collection.deleteMany({ groupId: groupId });
+        
+        logger.info(`Deleted ${result.deletedCount} transactions for group ${groupId}`);
+        return result.deletedCount;
+      } catch (error) {
+        logger.error(`Error in transactionService.deleteGroupTransactions: ${error.message}`);
+        return 0;
+      }
+    },
+  
+
   /**
    * Get recent transactions for a specific group, type, and coin
    * @param {string} groupId - The group ID
@@ -84,9 +128,8 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       
       // Using appropriate index and sorting for better performance
       const transactions = await collection.find(query)
-        .hint(indexHint)
-        .sort({ timestamp: -1 }) // Most recent first
-        .toArray();
+      .sort({ timestamp: -1 })
+      .toArray();
       
       return transactions;
     } catch (error) {
@@ -142,9 +185,8 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
         timestamp: { $gte: cutoffTime }
       };
       
-      // Using the coinAddress index
+      // Use the simple coinAddress index or let MongoDB choose
       const transactions = await collection.find(query)
-        .hint('group_type_coinaddress_lookup')
         .sort({ timestamp: -1 })
         .toArray();
       
@@ -152,26 +194,22 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
     } catch (error) {
       logger.error(`Error in getRecentTransactionsByAddress: ${error.message}`);
       
-      // Fallback if index hint fails
-      if (error.message.includes('hint')) {
-        try {
-          const collection = await this.getCollection();
-          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
-          
-          const query = {
-            groupId: groupId,
-            coinAddress: coinAddress,
-            timestamp: { $gte: cutoffTime }
-          };
-          
-          return await collection.find(query).sort({ timestamp: -1 }).toArray();
-        } catch (fallbackError) {
-          logger.error(`Fallback error in getRecentTransactionsByAddress: ${fallbackError.message}`);
-          return [];
-        }
+      // Fallback error handling
+      try {
+        const collection = await this.getCollection();
+        const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+        
+        const query = {
+          groupId: groupId,
+          coinAddress: coinAddress,
+          timestamp: { $gte: cutoffTime }
+        };
+        
+        return await collection.find(query).sort({ timestamp: -1 }).toArray();
+      } catch (fallbackError) {
+        logger.error(`Fallback error in getRecentTransactionsByAddress: ${fallbackError.message}`);
+        return [];
       }
-      
-      return [];
     }
   },
   
@@ -194,35 +232,14 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
         timestamp: { $gte: cutoffTime }
       };
       
-      // Using the coin index
+      // Let MongoDB choose the best index
       const transactions = await collection.find(query)
-        .hint('group_type_coin_lookup')
         .sort({ timestamp: -1 })
         .toArray();
       
       return transactions;
     } catch (error) {
       logger.error(`Error in getRecentTransactionsByCoin: ${error.message}`);
-      
-      // Fallback if index hint fails
-      if (error.message.includes('hint')) {
-        try {
-          const collection = await this.getCollection();
-          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
-          
-          const query = {
-            groupId: groupId,
-            coin: coin,
-            timestamp: { $gte: cutoffTime }
-          };
-          
-          return await collection.find(query).sort({ timestamp: -1 }).toArray();
-        } catch (fallbackError) {
-          logger.error(`Fallback error in getRecentTransactionsByCoin: ${fallbackError.message}`);
-          return [];
-        }
-      }
-      
       return [];
     }
   },
@@ -242,12 +259,10 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       
       const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
       
-      // Using the optimized index 'group_time_lookup'
       const transactions = await collection.find({
         timestamp: { $gte: cutoffTime }
       })
-      .hint('group_time_lookup') // Using the new index explicitly
-      .sort({ groupId: 1, timestamp: -1 }) // Sort by group and recent transactions first
+      .sort({ groupId: 1, timestamp: -1 })
       .toArray();
       
       // Measure query performance

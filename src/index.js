@@ -5,6 +5,7 @@ const { startBot } = require('./bot');
 const { startForwarder } = require('./forwarder');
 const confluenceService = require('./services/confluenceService'); 
 const transactionService = require('./db/services/transactionService');
+const cleanupService = require('./db/services/cleanupService');
 const queueManager = require('./services/queueService');
 const performanceMonitor = require('./utils/performanceMonitor');
 
@@ -17,6 +18,11 @@ async function startApp() {
     // Connect to MongoDB
     await db.connectToDatabase();
     logger.info('MongoDB connection established');
+
+    // Run database cleanup for orphaned transactions
+    logger.info('Running database cleanup...');
+    const cleanupResult = await cleanupService.runAllCleanupTasks();
+    logger.info(`Database cleanup completed: ${cleanupResult.orphanedTransactionsDeleted} orphaned transactions removed in ${cleanupResult.duration}ms`);
 
     // Initialize the confluence service
     await confluenceService.initialize();
@@ -58,6 +64,13 @@ async function startApp() {
         performanceMonitor.generatePerformanceReport();
       }
     }, 600000); // 10 minutes
+    
+    // Setup daily cleanup for orphaned transactions
+    setInterval(async () => {
+      logger.info('Running daily cleanup for orphaned transactions...');
+      const cleanupResult = await cleanupService.runAllCleanupTasks();
+      logger.info(`Daily cleanup completed: ${cleanupResult.orphanedTransactionsDeleted} orphaned transactions removed`);
+    }, 24 * 60 * 60 * 1000); // Run once per day
     
     // Setup detailed performance monitoring for slow operations
     setInterval(() => {

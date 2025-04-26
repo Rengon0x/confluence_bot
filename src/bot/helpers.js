@@ -37,9 +37,10 @@ const helpers = {
       `Please follow these steps:\n\n` +
       `1️⃣ Add me (@${config.telegram.botUsername}) to your group\n` +
       `2️⃣ Add ${tracker} to the same group\n` +
-      `3️⃣ Add our forwarder account (@${forwarder1Username} to the group.\n` +
+      `3️⃣ Add our forwarder account (@${forwarder1Username}) to the group.\n` +
       `4️⃣ Make me and both forwarders admin in the group (we need to read messages)\n` +
-      `5️⃣ Send /setup ${trackerName} in the group to activate monitoring\n\n` +
+      `5️⃣ Use /setup in the group, then enter ${trackerName} when prompted\n` +
+      `6️⃣ Select the tracker type (Cielo, Defined, or Ray)\n\n` +
       `Once set up, I'll alert you when multiple wallets buy or sell the same coin!\n\n` +
       `Note: We recommend also adding our backup forwarder @${forwarder2Username} to your group. This serves as a fallback system if the main forwarder @${forwarder1Username} experiences connectivity issues or becomes temporarily unavailable.`,
       {
@@ -52,7 +53,7 @@ const helpers = {
       // Ultimate fallback with minimal formatting
       bot.sendMessage(
         chatId,
-        `I'll monitor ${tracker} for you. Add me and both forwarders (@${forwarder1Username} and @${forwarder2Username}) to your group, then type /setup ${trackerName} there.`,
+        `I'll monitor ${tracker} for you. Add me and both forwarders (@${forwarder1Username} and @${forwarder2Username}) to your group, then type /setup there.`,
         {
           reply_markup: addToGroupButton
         }
