@@ -2,6 +2,7 @@ const { ObjectId } = require('mongodb');
 const { getDatabase } = require('../connection');
 const GroupModel = require('../models/group');
 const logger = require('../../utils/logger');
+const config = require('../../config/config');
 
 /**
  * Service for handling group-related database operations
@@ -34,10 +35,16 @@ const groupService = {
         logger.info(`Creating new group: ${groupName} (${groupId})`);
         const now = new Date();
         
+        // Use configuration defaults for new group settings
+        const defaultSettings = {
+          minWallets: config.confluence.minWallets,
+          windowMinutes: config.confluence.windowMinutes
+        };
+        
         const result = await collection.insertOne({
           groupId,
           groupName,
-          settings: GroupModel.defaults.settings,
+          settings: defaultSettings,
           active: GroupModel.defaults.active,
           createdAt: now,
           updatedAt: now
@@ -47,7 +54,7 @@ const groupService = {
           _id: result.insertedId,
           groupId,
           groupName,
-          settings: GroupModel.defaults.settings,
+          settings: defaultSettings,
           active: GroupModel.defaults.active,
           createdAt: now,
           updatedAt: now
@@ -62,6 +69,27 @@ const groupService = {
         
         group.groupName = groupName;
         group.updatedAt = new Date();
+      }
+      
+      // Ensure settings exist with defaults if missing
+      if (!group.settings) {
+        group.settings = {
+          minWallets: config.confluence.minWallets,
+          windowMinutes: config.confluence.windowMinutes
+        };
+        
+        await collection.updateOne(
+          { _id: group._id },
+          { $set: { settings: group.settings } }
+        );
+      } else {
+        // Fill in missing values with defaults
+        if (!group.settings.minWallets) {
+          group.settings.minWallets = config.confluence.minWallets;
+        }
+        if (!group.settings.windowMinutes) {
+          group.settings.windowMinutes = config.confluence.windowMinutes;
+        }
       }
       
       return group;
@@ -124,7 +152,14 @@ const groupService = {
     try {
       const collection = await this.getCollection();
       const group = await collection.findOne({ groupId });
-      return group ? group.settings : null;
+      
+      if (!group) return null;
+      
+      // Return settings with defaults filled in if missing
+      return {
+        minWallets: group.settings?.minWallets || config.confluence.minWallets,
+        windowMinutes: group.settings?.windowMinutes || config.confluence.windowMinutes
+      };
     } catch (error) {
       logger.error(`Error in groupService.getSettings: ${error.message}`);
       throw error;

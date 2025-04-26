@@ -20,6 +20,24 @@ const setupCommand = {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     
+    // Check if trackers already exist in this group
+    const existingTrackers = await db.getGroupTrackers(chatId.toString());
+    
+    if (existingTrackers && existingTrackers.length > 0) {
+      // Build a list of existing trackers
+      let trackerList = existingTrackers.map(t => `• ${t.trackerName} (${t.type || 'cielo'})`).join('\n');
+      
+      bot.sendMessage(
+        chatId,
+        `ℹ️ This group already has ${existingTrackers.length} tracker(s) configured:\n\n` +
+        `${trackerList}\n\n` +
+        `To manage existing trackers:\n` +
+        `• Use /listtrackers to view and manage all trackers\n` +
+        `• Use /settings to change confluence detection settings\n\n` +
+        `Do you want to add another tracker? Reply with the tracker username. ex: @defined_bot`
+      );
+    }
+    
     // Store setup state in a Map (could be replaced with Redis in production)
     const setupStates = bot.setupStates || new Map();
     bot.setupStates = setupStates;
@@ -30,12 +48,14 @@ const setupCommand = {
       timestamp: Date.now()
     });
     
-    // Ask for tracker name
-    bot.sendMessage(
-      chatId,
-      "Please enter the username of the tracker bot you want to monitor.\n\n" +
-      "Example: @CieloTrackerPrivate_bot"
-    );
+    // If no existing trackers, show the normal message
+    if (!existingTrackers || existingTrackers.length === 0) {
+      bot.sendMessage(
+        chatId,
+        "Please enter the username of the tracker bot you want to monitor.\n\n" +
+        "Example: @defined_bot"
+      );
+    }
     
     // Set up message handler to catch the next message from this user
     const setupListener = async (replyMsg) => {
@@ -49,7 +69,7 @@ const setupCommand = {
           const trackerMatch = replyMsg.text.match(/@?([a-zA-Z0-9_]{5,32})/);
           
           if (!trackerMatch) {
-            bot.sendMessage(chatId, "Please provide a valid username (e.g., @CieloTrackerPrivate_bot)");
+            bot.sendMessage(chatId, "Please provide a valid username (e.g., @defined_bot)");
             return;
           }
           
@@ -57,6 +77,19 @@ const setupCommand = {
           let trackerName = trackerMatch[1];
           
           logger.debug(`Extracted tracker name: ${trackerName}`);
+          
+          // Check if this tracker is already added to the group
+          const existingTracker = existingTrackers.find(t => t.trackerName === trackerName);
+          if (existingTracker) {
+            bot.sendMessage(
+              chatId,
+              `❌ The tracker @${trackerName} is already configured in this group as a ${existingTracker.type} tracker.\n\n` +
+              `Use /listtrackers to manage existing trackers.`
+            );
+            setupStates.delete(`${chatId}_${userId}`);
+            bot.removeListener('message', setupListener);
+            return;
+          }
           
           // Check if tracker is in the group
           try {
@@ -78,21 +111,74 @@ const setupCommand = {
           
           // Check if forwarders are members of this group
           try {
-            const forwarder1Present = await isUserInChat(bot, chatId, config.telegram.forwarders[0].forwarderUsername);
-            const forwarder2Present = await isUserInChat(bot, chatId, config.telegram.forwarders[1].forwarderUsername);
+            // Try alternative methods to check forwarder presence
+            let forwarder1IsAdmin = false;
+            let forwarder2IsAdmin = false;
             
-            // If forwarders are missing, warn the user
-            if (!forwarder1Present || !forwarder2Present) {
-              let missingForwarders = [];
+            try {
+              // First check if they're admins (more reliable than checking members)
+              const admins = await bot.getChatAdministrators(chatId);
               
-              if (!forwarder1Present) missingForwarders.push(`@${config.telegram.forwarders[0].forwarderUsername}`);
-              if (!forwarder2Present) missingForwarders.push(`@${config.telegram.forwarders[1].forwarderUsername}`);
+              for (const admin of admins) {
+                if (admin.user.username === config.telegram.forwarders[0].forwarderUsername) {
+                  forwarder1IsAdmin = true;
+                }
+                if (admin.user.username === config.telegram.forwarders[1].forwarderUsername) {
+                  forwarder2IsAdmin = true;
+                }
+              }
+              
+              logger.debug(`Admin check: Forwarder1=${forwarder1IsAdmin}, Forwarder2=${forwarder2IsAdmin}`);
+            } catch (adminError) {
+              logger.debug(`Could not check admins: ${adminError.message}`);
+            }
+            
+            // If not found as admins, try direct approach
+            let forwarder1Present = forwarder1IsAdmin;
+            let forwarder2Present = forwarder2IsAdmin;
+            
+            // Only try getChatMember if they're not already found as admins
+            if (!forwarder1Present) {
+              try {
+                const member1 = await bot.getChatMember(chatId, `@${config.telegram.forwarders[0].forwarderUsername}`);
+                forwarder1Present = member1 && ['creator', 'administrator', 'member'].includes(member1.status);
+              } catch (e) {
+                // Silently fail - useraccounts might not be queryable
+                logger.debug(`Could not check forwarder1 membership: ${e.message}`);
+              }
+            }
+            
+            if (!forwarder2Present) {
+              try {
+                const member2 = await bot.getChatMember(chatId, `@${config.telegram.forwarders[1].forwarderUsername}`);
+                forwarder2Present = member2 && ['creator', 'administrator', 'member'].includes(member2.status);
+              } catch (e) {
+                // Silently fail - useraccounts might not be queryable
+                logger.debug(`Could not check forwarder2 membership: ${e.message}`);
+              }
+            }
+            
+            // Only warn if BOTH forwarders are missing
+            if (!forwarder1Present && !forwarder2Present) {
+              bot.sendMessage(
+                chatId,
+                `⚠️ No forwarder accounts detected in this group.\n` +
+                `Please add at least one of:\n` +
+                `• @${config.telegram.forwarders[0].forwarderUsername} (Primary forwarder)\n` +
+                `• @${config.telegram.forwarders[1].forwarderUsername} (Backup forwarder)\n\n` +
+                `The bot needs at least one forwarder with admin privileges to function.`
+              );
+            } else if ((forwarder1Present && !forwarder1IsAdmin) || (forwarder2Present && !forwarder2IsAdmin)) {
+              // At least one forwarder is present but not admin
+              let needsAdminList = [];
+              
+              if (forwarder1Present && !forwarder1IsAdmin) needsAdminList.push(`@${config.telegram.forwarders[0].forwarderUsername}`);
+              if (forwarder2Present && !forwarder2IsAdmin) needsAdminList.push(`@${config.telegram.forwarders[1].forwarderUsername}`);
               
               bot.sendMessage(
                 chatId,
-                `⚠️ Warning: The following forwarder accounts are not in this group yet:\n` +
-                `${missingForwarders.join(', ')}\n\n` +
-                `Please add them and make them admins for the bot to work properly.`
+                `ℹ️ Forwarder(s) detected but need admin privileges:\n` +
+                `${needsAdminList.join('\n')}`
               );
             }
             
@@ -156,7 +242,24 @@ async function isUserInChat(bot, chatId, username) {
     const chatMember = await bot.getChatMember(chatId, `@${username}`);
     return chatMember && ['creator', 'administrator', 'member'].includes(chatMember.status);
   } catch (error) {
-    // If getChatMember throws an error, the user is likely not in the chat
+    // If getChatMember throws an error, it could mean:
+    // 1. The user is not in the chat
+    // 2. It's a userbot/useraccount that can't be queried
+    // 3. The bot doesn't have permission to check
+    logger.debug(`Could not check if ${username} is in chat: ${error.message}`);
+    return false;
+  }
+}
+
+async function isUserAdmin(bot, chatId, username) {
+  try {
+    // Get the list of chat administrators
+    const admins = await bot.getChatAdministrators(chatId);
+    
+    // Check if any admin matches the username
+    return admins.some(admin => admin.user.username === username);
+  } catch (error) {
+    logger.debug(`Could not check if ${username} is admin: ${error.message}`);
     return false;
   }
 }

@@ -232,19 +232,103 @@ function registerCallbackHandlers(bot) {
     
     // Handle setting changes
     if (data === 'set_min_wallets') {
+      // Store the state for this chat to expect a number input
+      const settingStates = bot.settingStates || new Map();
+      bot.settingStates = settingStates;
+      
+      settingStates.set(`${chatId}_${userId}`, {
+        setting: 'minWallets',
+        timestamp: Date.now()
+      });
+      
       bot.sendMessage(
         chatId,
         "Please send the minimum number of wallets required for confluence detection (2-10):"
       );
-      // Would need state management here
+      
+      // Set up a one-time listener for the next message from this user
+      const settingListener = async (msg) => {
+        if (msg.chat.id === chatId && msg.from.id === userId) {
+          const settingState = settingStates.get(`${chatId}_${userId}`);
+          
+          if (settingState && settingState.setting === 'minWallets') {
+            const value = parseInt(msg.text);
+            
+            if (isNaN(value) || value < 2 || value > 10) {
+              bot.sendMessage(chatId, "❌ Invalid value. Please enter a number between 2 and 10.");
+              return;
+            }
+            
+            try {
+              await db.updateGroupSettings(chatId.toString(), { minWallets: value });
+              bot.sendMessage(chatId, `✅ Minimum wallets updated to ${value}`);
+            } catch (error) {
+              bot.sendMessage(chatId, `❌ Failed to update settings: ${error.message}`);
+            }
+            
+            settingStates.delete(`${chatId}_${userId}`);
+            bot.removeListener('message', settingListener);
+          }
+        }
+      };
+      
+      bot.on('message', settingListener);
+      
+      // Clean up after 5 minutes
+      setTimeout(() => {
+        settingStates.delete(`${chatId}_${userId}`);
+        bot.removeListener('message', settingListener);
+      }, 300000);
     }
     
     if (data === 'set_time_window') {
+      // Store the state for this chat to expect a number input
+      const settingStates = bot.settingStates || new Map();
+      bot.settingStates = settingStates;
+      
+      settingStates.set(`${chatId}_${userId}`, {
+        setting: 'windowMinutes',
+        timestamp: Date.now()
+      });
+      
       bot.sendMessage(
         chatId,
-        "Please send the time window in minutes (5-1440):"
+        "Please send the time window in minutes (60-2880, i.e. 1-48 hours):"
       );
-      // Would need state management here
+      
+      // Set up a one-time listener for the next message from this user
+      const settingListener = async (msg) => {
+        if (msg.chat.id === chatId && msg.from.id === userId) {
+          const settingState = settingStates.get(`${chatId}_${userId}`);
+          
+          if (settingState && settingState.setting === 'windowMinutes') {
+            const value = parseInt(msg.text);
+            
+            if (isNaN(value) || value < 60 || value > 2880) {
+              bot.sendMessage(chatId, "❌ Invalid value. Please enter a number between 60 and 2880 minutes.");
+              return;
+            }
+            
+            try {
+              await db.updateGroupSettings(chatId.toString(), { windowMinutes: value });
+              bot.sendMessage(chatId, `✅ Time window updated to ${value} minutes`);
+            } catch (error) {
+              bot.sendMessage(chatId, `❌ Failed to update settings: ${error.message}`);
+            }
+            
+            settingStates.delete(`${chatId}_${userId}`);
+            bot.removeListener('message', settingListener);
+          }
+        }
+      };
+      
+      bot.on('message', settingListener);
+      
+      // Clean up after 5 minutes
+      setTimeout(() => {
+        settingStates.delete(`${chatId}_${userId}`);
+        bot.removeListener('message', settingListener);
+      }, 300000);
     }
   });
 }
