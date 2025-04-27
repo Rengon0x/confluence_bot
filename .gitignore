@@ -32,4 +32,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
-*.swo
+*.swodeploy-data.sh
+sync-data.sh
+data/
