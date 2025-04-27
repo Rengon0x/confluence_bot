@@ -43,7 +43,8 @@ module.exports = {
     { key: { name: 1, groupId: 1 }, unique: true },
     { key: { active: 1 } },
     { key: { type: 1 } },
-    { key: { setupUserId: 1 } }
+    { key: { setupUserId: 1 } },
+    { key: { setupUsername: 1 } }
   ],
   
   // Default values for new trackers

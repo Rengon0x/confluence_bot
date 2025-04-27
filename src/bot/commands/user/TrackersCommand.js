@@ -1,13 +1,13 @@
-// src/bot/commands/user/listTrackersCommand.js
+// src/bot/commands/user/TrackersCommand.js
 const logger = require('../../../utils/logger');
 const db = require('../../../db');
 
 /**
- * Command /listtrackers - Shows all active trackers in the group
+ * Command /trackers - Shows all active trackers in the group
  */
-const listTrackersCommand = {
-  name: 'listtrackers',
-  regex: /\/listtrackers(?:@\w+)?/,
+const TrackersCommand = {
+  name: 'trackers',
+  regex: /\/trackers(?:@\w+)?/,
   description: 'View all active trackers in this group',
   handler: async (bot, msg) => {
     try {
@@ -72,9 +72,9 @@ const listTrackersCommand = {
         }
       );
       
-      logger.info(`ListTrackers command executed for group ${chatId}, ${trackers.length} trackers found`);
+      logger.info(`Trackers command executed for group ${chatId}, ${trackers.length} trackers found`);
     } catch (error) {
-      logger.error(`Error in listtrackers command: ${error.message}`);
+      logger.error(`Error in trackers command: ${error.message}`);
       bot.sendMessage(
         msg.chat.id,
         "❌ An error occurred while retrieving the tracker list. Please try again later."
@@ -83,4 +83,4 @@ const listTrackersCommand = {
   }
 };
 
-module.exports = listTrackersCommand;
+module.exports = TrackersCommand;

@@ -41,7 +41,7 @@ const helpCommand = {
         
         `*Group Commands:*\n` +
         `/setup - Start the setup process for a new tracker\n` +
-        `/listtrackers - View all active trackers in this group\n` +
+        `/trackers - View all active trackers in this group\n` +
         `/remove @tracker - Stop monitoring a specific tracker\n` +
         `/stop - Stop all monitoring in this group\n` +
         `/status - Check which trackers are being monitored\n` +
@@ -66,7 +66,7 @@ const helpCommand = {
         `*Tips:*\n` +
         `• You can monitor multiple wallet trackers in the same group\n` +
         `• Each tracker can be a different type (Cielo, Defined, or Ray)\n` +
-        `• Use \`/listtrackers\` to see all active trackers and their types\n\n` +
+        `• Use \`/trackers\` to see all active trackers and their types\n\n` +
         
         `For support, contact: @${config.supportContact}`;
       

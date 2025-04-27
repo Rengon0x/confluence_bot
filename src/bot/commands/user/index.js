@@ -9,7 +9,7 @@ const recapCommand = require('./recapCommand');
 const quickRecapCommand = require('./quickRecapCommand');
 const addTrackerCommand = require('./addTrackerCommand');
 const helpCommand = require('./helpCommand'); 
-const listTrackersCommand = require('./listTrackersCommand');
+const TrackersCommand = require('./TrackersCommand');
 
 // Exporter toutes les commandes utilisateur
 module.exports = [
@@ -23,5 +23,5 @@ module.exports = [
   recapCommand,
   quickRecapCommand,
   addTrackerCommand,
-  listTrackersCommand
+  TrackersCommand
 ];

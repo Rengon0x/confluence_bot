@@ -233,6 +233,7 @@ const cieloParser = {
   extractWalletAddress(message) {
     try {
       let walletAddress = null;
+      let messageText = typeof message === 'string' ? message : message.text;
       
       // 1. Try to extract from Cielo profile URL
       const cieloProfileMatch = messageText.match(/https:\/\/app\.cielo\.finance\/profile\/([A-Za-z0-9]+)/i);

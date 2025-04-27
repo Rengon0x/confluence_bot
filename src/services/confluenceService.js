@@ -83,6 +83,7 @@ const confluenceService = {
         // Include all important fields
         grouped[key].push({
           walletName: tx.walletName,
+          walletAddress: tx.walletAddress, // Include wallet address
           coin: tx.coin,
           coinAddress: tx.coinAddress,
           amount: tx.amount,
@@ -174,57 +175,103 @@ const confluenceService = {
     
     return metadata;
   },
+
+/**
+ * Check if a transaction is a duplicate (same wallet, same token, similar time)
+ * @param {Array} existingTransactions - Existing transactions in the group
+ * @param {Transaction} newTransaction - New transaction to check
+ * @returns {boolean} - True if it's a duplicate
+ */
+isDuplicateTransaction(existingTransactions, newTransaction) {
+  // Time window for considering transactions as duplicates (e.g., 30 seconds)
+  const TIME_WINDOW = 30 * 1000; // 30 seconds in milliseconds
+  
+  return existingTransactions.some(existing => {
+    // Check if it's from the same wallet (using address if available, otherwise name)
+    const sameWallet = (existing.walletAddress && newTransaction.walletAddress) 
+      ? existing.walletAddress === newTransaction.walletAddress
+      : existing.walletName === newTransaction.walletName;
+    
+    // Check if it's the same token
+    const sameToken = existing.coinAddress === newTransaction.coinAddress || 
+                     existing.coin === newTransaction.coin;
+    
+    // Check if it's a similar amount (allowing for small differences due to fees)
+    const amountDifference = Math.abs(existing.baseAmount - newTransaction.baseAmount);
+    const similarAmount = existing.baseAmount === 0 
+      ? amountDifference < 0.01 
+      : amountDifference / existing.baseAmount < 0.01; // Within 1%
+    
+    // Check if it's within the time window
+    const timeDifference = Math.abs(new Date(existing.timestamp) - new Date(newTransaction.timestamp));
+    const withinTimeWindow = timeDifference < TIME_WINDOW;
+    
+    return sameWallet && sameToken && similarAmount && withinTimeWindow;
+  });
+},
   
  /**
- * Add a transaction to the service - amélioration des logs
+ * Add a transaction with duplicate checking
  * @param {Transaction} transaction - Transaction to add
  * @param {string} groupId - Group ID
+ * @returns {Promise<boolean>} Success status
  */
-async addTransaction(transaction, groupId = 'default') {
+async addTransaction(transaction, groupId) {
   try {
-    // Prioritize token address if available, otherwise use name
+    // Check for invalid transactions
+    if (!transaction.type || !['buy', 'sell'].includes(transaction.type)) {
+      logger.warn(`addTransaction: Invalid transaction type '${transaction.type}' - skipping`);
+      return false;
+    }
+    
+    // Generate cache key
     let key;
-    if (transaction.coinAddress && transaction.coinAddress.trim().length > 0) {
+    if (transaction.coinAddress && transaction.coinAddress.trim().length > 0 
+        && transaction.coinAddress !== 'unknown' 
+        && transaction.coinAddress !== 'undefined') {
       key = `${groupId}_${transaction.type}_addr_${transaction.coinAddress}`;
-      
-      // Improved log for debugging - include both name and address
-      logger.debug(`Using address-based key: ${key} for token ${transaction.coin || 'UNKNOWN'} (address: ${transaction.coinAddress})`);
     } else {
       key = `${groupId}_${transaction.type}_name_${transaction.coin}`;
-      
-      // Log the missing address
-      logger.debug(`Using name-based key: ${key} for token ${transaction.coin} (no address available)`);
+    }
+    
+    logger.debug(`Using ${transaction.coinAddress ? 'address' : 'name'}-based key: ${key} for token ${transaction.coin || 'UNKNOWN'} (address: ${transaction.coinAddress || 'none'})`);
+    
+    // Get existing transactions
+    let transactions = await this.transactionsCache.get(key) || [];
+    
+    // Check for duplicates
+    if (this.isDuplicateTransaction(transactions, transaction)) {
+      logger.info(`Duplicate transaction detected for wallet ${transaction.walletName} - skipping`);
+      return false;
     }
     
     // Store in MongoDB first
-    await transactionService.storeTransaction(transaction, groupId);
+    const mongoResult = await transactionService.storeTransaction(transaction, groupId);
+    if (!mongoResult) {
+      logger.error(`Failed to store transaction in MongoDB for group ${groupId}`);
+      return false;
+    }
     
-    // Then update the cache (de manière asynchrone)
-    let transactions = await this.transactionsCache.get(key) || [];
+    // Add to transaction array
+    transactions.push(transaction);
     
-    // Add the new transaction with all required fields
-    transactions.push({
-      walletName: transaction.walletName,
-      coin: transaction.coin,
-      coinAddress: transaction.coinAddress,
-      amount: transaction.amount,
-      usdValue: transaction.usdValue,
-      timestamp: transaction.timestamp,
-      marketCap: transaction.marketCap || 0,
-      baseAmount: transaction.baseAmount || 0,
-      baseSymbol: transaction.baseSymbol || '',
-      type: transaction.type  // Ensure we're storing the transaction type
-    });
-    
-    // Save to cache (de manière asynchrone)
+    // Store in cache
     await this.transactionsCache.set(key, transactions);
     
-    // Improved log message
-    logger.info(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin || transaction.coinAddress} by ${transaction.walletName}, key: ${key}`);
+    // Keep metadata synchronized
+    const metadataKey = `meta_${key}`;
+    let metadata = await this.transactionsCache.get(metadataKey) || {};
+    metadata.lastUpdated = new Date();
+    metadata.tokenAddress = transaction.coinAddress;
+    metadata.tokenSymbol = transaction.coin;
+    metadata.transactionCount = transactions.length;
     
+    await this.transactionsCache.set(metadataKey, metadata);
+    
+    logger.info(`Transaction added for group ${groupId}: ${transaction.type} ${transaction.amount} ${transaction.coin || 'UNKNOWN'} by ${transaction.walletName}, key: ${key}`);
     return true;
   } catch (error) {
-    logger.error('Error adding transaction:', error);
+    logger.error(`Error in confluenceService.addTransaction: ${error.message}`);
     return false;
   }
 },
@@ -433,7 +480,8 @@ async addTransaction(transaction, groupId = 'default') {
       // Count cached transactions wallets
       const allTransactions = [...buyTransactions, ...sellTransactions];
       allTransactions.forEach(tx => {
-        walletTracker.set(tx.walletName, true);
+        const walletId = tx.walletAddress || tx.walletName;
+        walletTracker.set(walletId, true);
       });
       
       // Count older buy transactions wallets
@@ -584,10 +632,14 @@ async addTransaction(transaction, groupId = 'default') {
           continue;
         }
         
-        if (!walletMap.has(tx.walletName)) {
+        // Get wallet identifier (prefer address, fallback to name)
+        const walletId = tx.walletAddress || tx.walletName;
+        
+        if (!walletMap.has(walletId)) {
           // New wallet - not seen before
-          walletMap.set(tx.walletName, {
+          walletMap.set(walletId, {
             walletName: tx.walletName,
+            walletAddress: tx.walletAddress,
             amount: tx.amount,
             usdValue: tx.usdValue || 0,
             timestamp: tx.timestamp,
@@ -605,7 +657,7 @@ async addTransaction(transaction, groupId = 'default') {
           });
         } else {
           // Existing wallet - update its data based on transaction type
-          const wallet = walletMap.get(tx.walletName);
+          const wallet = walletMap.get(walletId);
           
           // Always add the transaction to the wallet's transaction history
           wallet.transactions.push(tx);
@@ -613,6 +665,11 @@ async addTransaction(transaction, groupId = 'default') {
           // Update the latest type (for update detection purposes), but preserve transaction history
           const previousType = wallet.type;
           wallet.type = tx.type;
+          
+          // Update wallet address if it wasn't set before
+          if (!wallet.walletAddress && tx.walletAddress) {
+            wallet.walletAddress = tx.walletAddress;
+          }
           
           // Track buy and sell amounts separately
           if (tx.type === 'buy') {
@@ -664,18 +721,19 @@ async addTransaction(transaction, groupId = 'default') {
       
       // First add existing wallets in their original order
       existingConfluence.wallets.forEach(existingWallet => {
-        const updatedWallet = walletMap.get(existingWallet.walletName);
+        const walletId = existingWallet.walletAddress || existingWallet.walletName;
+        const updatedWallet = walletMap.get(walletId);
         if (updatedWallet && updatedWallet.transactions.length > 0) {
           wallets.push(updatedWallet);
         }
       });
       
       // Then add new wallets in order of their first transaction
-      const newWalletNames = [...walletMap.keys()].filter(
-        name => !existingConfluence.wallets.some(w => w.walletName === name)
+      const newWalletIds = [...walletMap.keys()].filter(
+        id => !existingConfluence.wallets.some(w => (w.walletAddress || w.walletName) === id)
       );
       
-      const newWallets = newWalletNames.map(name => walletMap.get(name))
+      const newWallets = newWalletIds.map(id => walletMap.get(id))
         .filter(wallet => wallet.transactions.length > 0)
         .sort((a, b) => {
           const aFirstTx = a.transactions.reduce((earliest, tx) => 

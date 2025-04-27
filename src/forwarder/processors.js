@@ -5,6 +5,7 @@ const parserService = require('../services/parserService');
 const confluenceService = require('../services/confluenceService');
 const telegramService = require('../services/telegramService');
 const queueManager = require('../services/queueService');
+const userWalletService = require('../db/services/userWalletService');
 const db = require('../db');
 
 /**
@@ -68,9 +69,8 @@ async function processMessage(trackerName, message) {
             await userWalletService.addOrUpdateWallet(
               trackerWithSetupInfo.setupUserId,
               trackerWithSetupInfo.setupUsername,
-              transaction.walletAddress,
-              transaction.coinAddress || transaction.walletName, // Use address if available, otherwise use name
-              transaction.walletName, // The label/tag of the wallet
+              transaction.walletAddress,  
+              transaction.walletName,    
               trackerType,
               group.id
             );

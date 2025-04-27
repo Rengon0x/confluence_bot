@@ -32,7 +32,7 @@ const setupCommand = {
         `ℹ️ This group already has ${existingTrackers.length} tracker(s) configured:\n\n` +
         `${trackerList}\n\n` +
         `To manage existing trackers:\n` +
-        `• Use /listtrackers to view and manage all trackers\n` +
+        `• Use /trackers to view and manage all trackers\n` +
         `• Use /settings to change confluence detection settings\n\n` +
         `Do you want to add another tracker? Reply with the tracker username. ex: @defined_bot`
       );
@@ -65,8 +65,22 @@ const setupCommand = {
         
         // Check if user is in setup mode and awaiting tracker name
         if (setupState && setupState.state === 'awaiting_tracker_name') {
+          const message = replyMsg.text.trim();
+          
+          // Check if message is a command (starts with /)
+          if (message.startsWith('/')) {
+            // It's a command, don't process it as a tracker name
+            return;
+          }
+          
+          // Check if message starts with @
+          if (!message.startsWith('@')) {
+            bot.sendMessage(chatId, "❌ Tracker username must start with @. Please try again (e.g., @defined_bot)");
+            return;
+          }
+          
           // Check if message matches expected format (starts with @ or contains a username)
-          const trackerMatch = replyMsg.text.match(/@?([a-zA-Z0-9_]{5,32})/);
+          const trackerMatch = message.match(/@([a-zA-Z0-9_]{5,32})/);
           
           if (!trackerMatch) {
             bot.sendMessage(chatId, "Please provide a valid username (e.g., @defined_bot)");
@@ -84,7 +98,7 @@ const setupCommand = {
             bot.sendMessage(
               chatId,
               `❌ The tracker @${trackerName} is already configured in this group as a ${existingTracker.type} tracker.\n\n` +
-              `Use /listtrackers to manage existing trackers.`
+              `Use /trackers to manage existing trackers.`
             );
             setupStates.delete(`${chatId}_${userId}`);
             bot.removeListener('message', setupListener);
