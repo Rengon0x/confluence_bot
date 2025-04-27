@@ -14,6 +14,7 @@ module.exports = {
       { key: { coin: 1 } },
       { key: { coinAddress: 1 } },
       { key: { walletName: 1 } },
+      { key: { walletAddress: 1 } },
       
       // Timestamp index with TTL
       { key: { timestamp: 1 }, expireAfterSeconds: 172800 },  // TTL index - 48 hours

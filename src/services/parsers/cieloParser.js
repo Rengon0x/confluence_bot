@@ -1,4 +1,4 @@
-const Transaction = require('../../db/models/transaction');
+const Transaction = require('../../models/transaction');
 const logger = require('../../utils/logger');
 
 /**
@@ -30,12 +30,19 @@ const cieloParser = {
       
       // Log the message for debugging
       logger.info('New message detected: ' + messageText.substring(0, 100).replace(/\n/g, ' ') + '...');
+
+
       logger.debug('Full message to parse for URL: ' + messageText);
+
+      // Extract wallet address first
+      const walletAddress = this.extractWalletAddress(message);
       
       // Extract wallet name
       const walletNameMatch = messageText.match(/^#([^\n]+)/);
       const walletName = walletNameMatch ? walletNameMatch[1] : 'unknown';
       logger.debug('Wallet name match: ' + (walletName || 'none'));
+      logger.debug('Wallet address: ' + (walletAddress || 'none'));
+
       
       // Extract token address from URLs
       let coinAddress = '';
@@ -141,7 +148,8 @@ const cieloParser = {
             new Date(),
             marketCap,
             baseAmount,
-            baseSymbol
+            baseSymbol,
+            walletAddress
           );
         }
         
@@ -186,7 +194,8 @@ const cieloParser = {
             new Date(),
             marketCap,
             baseAmount,
-            baseSymbol
+            baseSymbol,
+            walletAddress
           );
         }
       }
@@ -220,6 +229,47 @@ const cieloParser = {
     
     return marketCap;
   },
+
+  extractWalletAddress(message) {
+    try {
+      let walletAddress = null;
+      
+      // 1. Try to extract from Cielo profile URL
+      const cieloProfileMatch = messageText.match(/https:\/\/app\.cielo\.finance\/profile\/([A-Za-z0-9]+)/i);
+      if (cieloProfileMatch && cieloProfileMatch[1]) {
+        const candidateAddress = cieloProfileMatch[1];
+        if (this.isValidSolanaAddress(candidateAddress)) {
+          walletAddress = candidateAddress;
+          logger.debug(`Wallet address extracted from Cielo profile URL: ${walletAddress}`);
+        }
+      }
+      
+      // 2. If not found, try to extract from message entities
+      if (!walletAddress && typeof message === 'object' && message.entities) {
+        for (const entity of message.entities) {
+          if (entity.className === "MessageEntityTextUrl" && entity.url) {
+            const match = entity.url.match(/https:\/\/app\.cielo\.finance\/profile\/([A-Za-z0-9]+)/i);
+            if (match && match[1] && this.isValidSolanaAddress(match[1])) {
+              walletAddress = match[1];
+              logger.debug(`Wallet address extracted from entity URL: ${walletAddress}`);
+              break;
+            }
+          }
+        }
+      }
+      
+      return walletAddress;
+    } catch (error) {
+      logger.error('Error extracting wallet address:', error);
+      return null;
+    }
+  },
+
+  isValidSolanaAddress(address) {
+    // Solana addresses are typically 32-44 characters long and use base58 encoding
+    const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    return solanaAddressRegex.test(address);
+  },  
   
   normalizeTokenSymbol(symbol) {
     return symbol.replace(/[^\w\-•]/g, '').toUpperCase();

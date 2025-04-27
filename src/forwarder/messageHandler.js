@@ -40,9 +40,14 @@ function setupMessageHandler() {
         // Log details about the received message
         logger.debug(`[${clientId}] Received message. Sender ID: ${senderId}, Username: ${senderUsername}`);
         logger.debug(`[${clientId}] Message content: ${message.text.substring(0, 100)}...`);
+
+        logger.debug(`Checking if message from ${senderId} matches tracked sources`);
+        logger.debug(`Current monitored trackers: ${Array.from(monitoredTrackers.keys()).join(', ')}`);
+
         
         // Check if this message is from a monitored tracker
         for (const [trackerName, tracker] of monitoredTrackers.entries()) {
+          logger.debug(`Comparing ${senderId} with tracker ${trackerName} (ID: ${tracker.entity.id})`);
           // Compare ID or username
           if (tracker.entity.id === senderId || 
               tracker.entity.username === senderUsername ||

@@ -23,7 +23,7 @@ const trackerService = {
    * @param {string} type - The tracker type ('cielo', 'defined', 'ray')
    * @returns {Promise<Object>} The tracker document
    */
-  async findOrCreate(name, groupId, type = 'cielo') {
+  async findOrCreate(name, groupId, type = 'cielo', setupUserId = null, setupUsername = null) {
     try {
       const collection = await this.getCollection();
       
@@ -40,6 +40,8 @@ const trackerService = {
           groupId,
           type,
           active: TrackerModel.defaults.active,
+          setupUserId: setupUserId,
+          setupUsername: setupUsername,
           createdAt: now,
           updatedAt: now
         });
@@ -50,17 +52,11 @@ const trackerService = {
           groupId,
           type,
           active: TrackerModel.defaults.active,
+          setupUserId: setupUserId,
+          setupUsername: setupUsername,
           createdAt: now,
           updatedAt: now
         };
-      } else if (!tracker.type || tracker.type !== type) {
-        // Update the type if it's different or missing
-        await collection.updateOne(
-          { _id: tracker._id },
-          { $set: { type, updatedAt: new Date() } }
-        );
-        tracker.type = type;
-        tracker.updatedAt = new Date();
       }
       
       return tracker;

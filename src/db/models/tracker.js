@@ -42,12 +42,15 @@ module.exports = {
     { key: { groupId: 1 } },
     { key: { name: 1, groupId: 1 }, unique: true },
     { key: { active: 1 } },
-    { key: { type: 1 } }
+    { key: { type: 1 } },
+    { key: { setupUserId: 1 } }
   ],
   
   // Default values for new trackers
   defaults: {
     active: true,
-    type: 'cielo'
+    type: 'cielo',
+    setupUserId: null,
+    setupUsername: null
   }
 };

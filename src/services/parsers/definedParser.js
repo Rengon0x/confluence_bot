@@ -1,4 +1,4 @@
-const Transaction = require('../../db/models/transaction');
+const Transaction = require('../../models/transaction');
 const logger = require('../../utils/logger');
 
 /**

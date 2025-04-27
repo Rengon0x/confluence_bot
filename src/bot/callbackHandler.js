@@ -28,7 +28,14 @@ function registerCallbackHandlers(bot) {
       
       try {
         // Register tracking setup in the database with tracker type
-        const success = await db.registerTracking(trackerName, chatId.toString(), query.message.chat.title, trackerType);
+        const success = await db.registerTracking(
+          trackerName, 
+          chatId.toString(), 
+          query.message.chat.title, 
+          trackerType,
+          userId.toString(),
+          query.from.username
+        );
         
         if (success) {
           bot.editMessageText(

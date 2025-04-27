@@ -1,6 +1,7 @@
 const trackerService = require('./trackerService');
 const groupService = require('./groupService');
 const transactionService = require('./transactionService');
+const userWalletService = require('./userWalletService');
 const logger = require('../../utils/logger');
 
 /**
@@ -15,13 +16,27 @@ const setupService = {
    * @param {string} trackerType - Type of the tracker ('cielo', 'defined', 'ray')
    * @returns {Promise<boolean>} Success status
    */
-  async registerTracking(trackerName, groupId, groupName, trackerType = 'cielo') {
+  async registerTracking(trackerName, groupId, groupName, trackerType = 'cielo', userId = null, username = null) {
     try {
       // Find or create group first
       const group = await groupService.findOrCreate(groupId, groupName);
       
       // Find or create tracker specific to this group with type
       const tracker = await trackerService.findOrCreate(trackerName, groupId, trackerType);
+      
+      // NEW CODE: If userId and username are provided, create an entry for this user
+      if (userId && username) {
+        // Create an initial entry for this user
+        // This helps us track who set up each tracker
+        await userWalletService.addOrUpdateWallet(
+          userId,
+          username,
+          'SETUP_MARKER', // Special address to mark the setup action
+          `Setup ${trackerName}`, // Label indicating this is a setup record
+          trackerType,
+          groupId
+        );
+      }
       
       logger.info(`Registered tracking for ${trackerName} (${trackerType}) in group ${groupName}`);
       return true;

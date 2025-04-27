@@ -45,7 +45,7 @@ async function startApp() {
       await confluenceService.cleanOldTransactions();
       
       // Check and log resource usage
-      const cacheStats = await confluenceService.estimateSize();
+      const cacheStats = await confluenceService.estimateCacheSize();
       const dbStats = await transactionService.getCollectionSize();
       
       // Get queue stats

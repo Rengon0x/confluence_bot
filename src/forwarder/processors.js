@@ -45,16 +45,39 @@ async function processMessage(trackerName, message) {
     }
     
     // Process for each group
-    for (const group of groups) {
+     // Process for each group
+     for (const group of groups) {
       try {
-        // Parse the message using the appropriate parser based on tracker type
-        const trackerType = group.trackerType || 'cielo'; // Default to cielo for backward compatibility
+        // Parse the message using the appropriate parser
+        const trackerType = group.trackerType || 'cielo';
         const transaction = parserService.parseTrackerMessage(message, trackerType);
         
         // If it's not a buy or sell transaction, ignore
         if (!transaction || (transaction.type !== 'buy' && transaction.type !== 'sell')) {
           logger.debug(`Message ignored - not a valid transaction for tracker type ${trackerType}`);
           continue;
+        }
+        
+        // NEW CODE: Register the wallet for the user who set up this tracker
+        try {
+          // Get the setup information for this tracker in this group
+          const trackerWithSetupInfo = await db.trackerService.findByNameAndGroup(trackerName, group.id);
+          
+          if (trackerWithSetupInfo && trackerWithSetupInfo.setupUserId && trackerWithSetupInfo.setupUsername) {
+            // Register this wallet for the user who set up the tracker
+            await userWalletService.addOrUpdateWallet(
+              trackerWithSetupInfo.setupUserId,
+              trackerWithSetupInfo.setupUsername,
+              transaction.walletAddress,
+              transaction.coinAddress || transaction.walletName, // Use address if available, otherwise use name
+              transaction.walletName, // The label/tag of the wallet
+              trackerType,
+              group.id
+            );
+          }
+        } catch (walletError) {
+          logger.error(`Error registering wallet: ${walletError.message}`);
+          // Continue processing even if wallet registration fails
         }
         
         // Keep track of the current token to filter confluences
