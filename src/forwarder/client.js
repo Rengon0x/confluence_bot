@@ -7,7 +7,7 @@ const logger = require('../utils/logger');
 const config = require('../config/config');
 
 // Path to save the session
-const DATA_DIR = path.join(__dirname, '../data');
+const DATA_DIR = path.join(__dirname, '../../data');
 const SESSION_FILE_PATH = path.join(DATA_DIR, 'telegram-session.txt');
 
 // Ensure data directory exists
