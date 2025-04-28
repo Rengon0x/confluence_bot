@@ -30,6 +30,18 @@ const addTrackerCommand = {
       trackerName = trackerName.replace(/^@/, '');
       
       try {
+        // First check the number of trackers
+        const existingTrackers = await db.getGroupTrackers(chatId.toString());
+        
+        if (existingTrackers && existingTrackers.length >= 5) {
+          bot.sendMessage(
+            chatId,
+            `⚠️ Maximum trackers reached!\n\n` +
+            `This group already has 5 trackers configured, which is the maximum allowed.\n\n` +
+            `Please remove an existing tracker with /trackers before adding a new one.`
+          );
+          return;
+        }
         // Register the tracker
         const success = await db.registerTracking(trackerName, chatId.toString(), chatName);
         

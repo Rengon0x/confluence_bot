@@ -53,7 +53,7 @@ const TrackersCommand = {
         message += '\n';
       }
       
-      message += `Total trackers: ${trackers.length}\n\n`;
+      message += `Total trackers: ${trackers.length}/5\n\n`;
       
       // Add warning about data deletion
       message += `⚠️ *WARNING:* Removing a tracker will also delete:\n`;

@@ -207,9 +207,9 @@ const setupCommand = {
             const trackerTypeKeyboard = {
               inline_keyboard: [
                 [
-                  { text: '🔷 Cielo', callback_data: `set_tracker_type:${trackerName}:cielo` },
-                  { text: '📊 Defined', callback_data: `set_tracker_type:${trackerName}:defined` },
-                  { text: '🌟 Ray', callback_data: `set_tracker_type:${trackerName}:ray` }
+                  { text: 'Cielo', callback_data: `set_tracker_type:${trackerName}:cielo` },
+                  { text: 'Defined', callback_data: `set_tracker_type:${trackerName}:defined` },
+                  { text: 'Ray', callback_data: `set_tracker_type:${trackerName}:ray` }
                 ]
               ]
             };
@@ -262,6 +262,43 @@ async function isUserInChat(bot, chatId, username) {
     // 3. The bot doesn't have permission to check
     logger.debug(`Could not check if ${username} is in chat: ${error.message}`);
     return false;
+  }
+}
+
+async function registerTracking(trackerName, groupId, groupName, trackerType = 'cielo', userId = null, username = null) {
+  try {
+    // First check how many trackers are already configured for this group
+    const existingTrackers = await getTrackersForGroup(groupId);
+    
+    // If already 5 trackers, deny adding a new one
+    if (existingTrackers && existingTrackers.length >= 5) {
+      logger.warn(`Group ${groupId} (${groupName}) attempting to add tracker but already has maximum of 5`);
+      return { success: false, reason: 'MAX_TRACKERS_REACHED' };
+    }
+    
+    // Existing code...
+    const group = await groupService.findOrCreate(groupId, groupName);
+    const tracker = await trackerService.findOrCreate(trackerName, groupId, trackerType);
+    
+    // If userId and username are provided, create an entry for this user
+    if (userId && username) {
+      // Create an initial entry for this user
+      // This helps us track who set up each tracker
+      await userWalletService.addOrUpdateWallet(
+        userId,
+        username,
+        'SETUP_MARKER', // Special address to mark the setup action
+        `Setup ${trackerName}`, // Label indicating this is a setup record
+        trackerType,
+        groupId
+      );
+    }
+    
+    logger.info(`Registered tracking for ${trackerName} (${trackerType}) in group ${groupName}`);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error in setupService.registerTracking: ${error.message}`);
+    return { success: false, reason: 'ERROR', message: error.message };
   }
 }
 

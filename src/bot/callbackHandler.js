@@ -38,13 +38,25 @@ function registerCallbackHandlers(bot) {
         );
         
         if (success) {
+          const groupSettings = await db.getGroupSettings(chatId.toString());
           bot.editMessageText(
             `✅ Setup complete! I'm now monitoring *${trackerName}* (${trackerType}) in this group.\n\n` +
             `I'll alert you when multiple wallets buy or sell the same coin.\n\n` +
-            `Default settings:\n` +
-            `• Minimum wallets for confluence: ${config.confluence.minWallets}\n` +
-            `• Time window: ${config.confluence.windowMinutes} minutes\n\n` +
+            `Current settings:\n` +
+            `• Minimum wallets for confluence: ${groupSettings.minWallets}\n` +
+            `• Time window: ${groupSettings.windowMinutes} minutes\n\n` +
             `You can change these with /settings`,
+            {
+              chat_id: chatId,
+              message_id: query.message.message_id,
+              parse_mode: 'Markdown'
+            }
+          );
+        } else if (result.reason === 'MAX_TRACKERS_REACHED') {
+          bot.editMessageText(
+            `⚠️ Maximum trackers reached!\n\n` +
+            `This group already has 5 trackers configured, which is the maximum allowed.\n\n` +
+            `Please remove an existing tracker with /trackers before adding a new one.`,
             {
               chat_id: chatId,
               message_id: query.message.message_id,
@@ -53,7 +65,7 @@ function registerCallbackHandlers(bot) {
           );
         } else {
           bot.editMessageText(
-            `❌ Setup failed. Please try again or contact support.`,
+            `❌ Setup failed. ${result.message || 'Please try again or contact support.'}`,
             {
               chat_id: chatId,
               message_id: query.message.message_id

@@ -83,12 +83,20 @@ const groupService = {
           { $set: { settings: group.settings } }
         );
       } else {
-        // Fill in missing values with defaults
-        if (!group.settings.minWallets) {
-          group.settings.minWallets = config.confluence.minWallets;
-        }
-        if (!group.settings.windowMinutes) {
-          group.settings.windowMinutes = config.confluence.windowMinutes;
+        // Ensure all required settings exist by filling missing ones with defaults
+        const updatedSettings = {
+          ...group.settings,
+          minWallets: group.settings.minWallets ?? config.confluence.minWallets,
+          windowMinutes: group.settings.windowMinutes ?? config.confluence.windowMinutes
+        };
+        
+        // Only update if changes were made
+        if (JSON.stringify(updatedSettings) !== JSON.stringify(group.settings)) {
+          await collection.updateOne(
+            { _id: group._id },
+            { $set: { settings: updatedSettings } }
+          );
+          group.settings = updatedSettings;
         }
       }
       

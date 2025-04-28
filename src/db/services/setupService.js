@@ -18,13 +18,29 @@ const setupService = {
    */
   async registerTracking(trackerName, groupId, groupName, trackerType = 'cielo', userId = null, username = null) {
     try {
+      // First check how many trackers are already configured for this group
+      const existingTrackers = await getTrackersForGroup(groupId);
+    
+      // If already 5 trackers, deny adding a new one
+      if (existingTrackers && existingTrackers.length >= 5) {
+        logger.warn(`Group ${groupId} (${groupName}) attempting to add tracker but already has maximum of 5`);
+        return { success: false, reason: 'MAX_TRACKERS_REACHED' };
+      }
+    
       // Find or create group first
       const group = await groupService.findOrCreate(groupId, groupName);
+      if (!group) {
+        logger.error(`Failed to create or find group ${groupId}`);
+        return { success: false, reason: 'GROUP_ERROR' };
+      }
       
       // Find or create tracker specific to this group with type
       const tracker = await trackerService.findOrCreate(trackerName, groupId, trackerType);
+      if (!tracker) {
+        logger.error(`Failed to create or find tracker ${trackerName} for group ${groupId}`);
+        return { success: false, reason: 'TRACKER_ERROR' };
+      }
       
-      // NEW CODE: If userId and username are provided, create an entry for this user
       if (userId && username) {
         // Create an initial entry for this user
         // This helps us track who set up each tracker
@@ -39,10 +55,10 @@ const setupService = {
       }
       
       logger.info(`Registered tracking for ${trackerName} (${trackerType}) in group ${groupName}`);
-      return true;
+      return { success: true, tracker: tracker };
     } catch (error) {
       logger.error(`Error in setupService.registerTracking: ${error.message}`);
-      return false;
+      return { success: false, reason: 'ERROR', message: error.message };
     }
   },
 

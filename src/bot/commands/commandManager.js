@@ -3,13 +3,13 @@ const logger = require('../../utils/logger');
 const config = require('../../config/config');
 
 /**
- * Classe pour gérer les commandes du bot
+ * Class to manage bot commands
  */
 class CommandManager {
   constructor() {
     this.commands = new Map();
     this.adminCommands = new Map();
-    this.admins = new Set(); // Ensemble des IDs admin
+    this.admins = new Set(); // Set of admin IDs
   }
 
   /**
@@ -34,12 +34,12 @@ class CommandManager {
   }
 
   /**
-   * Ajoute une commande utilisateur
-   * @param {Object} command - Objet de commande
-   * @param {string} command.name - Nom de la commande (sans le /)
-   * @param {RegExp} command.regex - Expression régulière pour matcher la commande
-   * @param {Function} command.handler - Fonction de gestion de la commande
-   * @param {string} command.description - Description de la commande
+   * Add a user command
+   * @param {Object} command - Command object
+   * @param {string} command.name - Command name (without the /)
+   * @param {RegExp} command.regex - Regular expression to match the command
+   * @param {Function} command.handler - Command handler function
+   * @param {string} command.description - Command description
    */
   addCommand(command) {
     if (!command.name || !command.regex || !command.handler) {
@@ -52,8 +52,8 @@ class CommandManager {
   }
 
   /**
-   * Ajoute une commande admin
-   * @param {Object} command - Objet de commande admin
+   * Add an admin command
+   * @param {Object} command - Admin command object
    */
   addAdminCommand(command) {
     if (!command.name || !command.regex || !command.handler) {
@@ -66,47 +66,74 @@ class CommandManager {
   }
 
   /**
-   * Ajoute plusieurs commandes à la fois
-   * @param {Array<Object>} commands - Tableau de commandes
+   * Add multiple commands at once
+   * @param {Array<Object>} commands - Array of commands
    */
   addCommands(commands) {
     commands.forEach(command => this.addCommand(command));
   }
 
   /**
-   * Ajoute plusieurs commandes admin à la fois
-   * @param {Array<Object>} commands - Tableau de commandes admin
+   * Add multiple admin commands at once
+   * @param {Array<Object>} commands - Array of admin commands
    */
   addAdminCommands(commands) {
     commands.forEach(command => this.addAdminCommand(command));
   }
 
   /**
-   * Ajoute un ID utilisateur à la liste des admins
-   * @param {string|number} userId - ID Telegram de l'admin
+   * Add a user ID to the admin list
+   * @param {string|number} userId - Telegram ID of the admin
    */
   addAdmin(userId) {
     this.admins.add(userId.toString());
   }
 
   /**
-   * Vérifie si un utilisateur est admin
-   * @param {string|number} userId - ID Telegram de l'utilisateur
-   * @returns {boolean} True si l'utilisateur est admin
+   * Check if a user is an admin
+   * @param {string|number} userId - Telegram ID of the user
+   * @returns {boolean} True if the user is an admin
    */
   isAdmin(userId) {
-    // Pour le développement, on peut toujours retourner true
-    // En production, décommenter la ligne ci-dessous
+    // For development, we can always return true
+    // In production, uncomment the line below
     // return this.admins.has(userId.toString());
     return true;
   }
 
   /**
-   * Enregistre toutes les commandes auprès du bot Telegram
-   * @param {TelegramBot} bot - Instance du bot Telegram
+   * Clear all conversation states for a user
+   * @param {TelegramBot} bot - Telegram bot instance
+   * @param {Object} msg - Message object
+   */
+  clearConversationStates(bot, msg) {
+    if (!msg || !msg.from) return;
+    
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const stateKey = `${chatId}_${userId}`;
+    
+    // Clear setup states
+    if (bot.setupStates && bot.setupStates.has(stateKey)) {
+      bot.setupStates.delete(stateKey);
+      logger.debug(`Setup state cleared for user ${userId} in chat ${chatId}`);
+    }
+    
+    // Clear settings states
+    if (bot.settingStates && bot.settingStates.has(stateKey)) {
+      bot.settingStates.delete(stateKey);
+      logger.debug(`Setting state cleared for user ${userId} in chat ${chatId}`);
+    }
+    
+    // Add other states to clear if needed
+  }
+
+  /**
+   * Register all commands with the Telegram bot
+   * @param {TelegramBot} bot - Telegram bot instance
    */
   registerAll(bot) {
-    // Enregistrer les commandes utilisateur
+    // Register user commands
     for (const command of this.commands.values()) {
       bot.onText(command.regex, (msg, match) => {
         try {
@@ -115,6 +142,9 @@ class CommandManager {
             logger.debug(`Ignoring command ${command.name} directed at another bot`);
             return;
           }
+          
+          // Clear conversation states before executing a new command
+          this.clearConversationStates(bot, msg);
           
           logger.info(`Command ${command.name} executed by user ${msg.from.id}`);
           command.handler(bot, msg, match);
@@ -125,7 +155,7 @@ class CommandManager {
       });
     }
 
-    // Enregistrer les commandes admin
+    // Register admin commands
     for (const command of this.adminCommands.values()) {
       bot.onText(command.regex, (msg, match) => {
         try {
@@ -135,7 +165,10 @@ class CommandManager {
             return;
           }
           
-          // Vérifier si l'utilisateur est admin
+          // Clear conversation states before executing a new command
+          this.clearConversationStates(bot, msg);
+          
+          // Check if the user is an admin
           if (!this.isAdmin(msg.from.id)) {
             bot.sendMessage(msg.chat.id, "Sorry, only admins can use this command.");
             return;
