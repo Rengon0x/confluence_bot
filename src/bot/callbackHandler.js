@@ -28,7 +28,7 @@ function registerCallbackHandlers(bot) {
       
       try {
         // Register tracking setup in the database with tracker type
-        const success = await db.registerTracking(
+        const result = await db.registerTracking(
           trackerName, 
           chatId.toString(), 
           query.message.chat.title, 
@@ -36,8 +36,10 @@ function registerCallbackHandlers(bot) {
           userId.toString(),
           query.from.username
         );
+
+        logger.debug(`Setting up tracker with userId: ${userId} and username: ${query.from.username}`);
         
-        if (success) {
+        if (result.success) {
           const groupSettings = await db.getGroupSettings(chatId.toString());
           bot.editMessageText(
             `✅ Setup complete! I'm now monitoring *${trackerName}* (${trackerType}) in this group.\n\n` +

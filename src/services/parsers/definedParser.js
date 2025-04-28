@@ -17,16 +17,16 @@ const definedParser = {
       // Handle case where message is an object vs a simple string
       let messageText = typeof message === 'string' ? message : message.text;
       
-      // Extract wallet address from Solscan URL
-      const walletAddress = this.extractWalletAddress(messageText);
+      // Extract wallet address
+      const walletAddress = this.extractWalletAddress(message);
       
-      // Extract wallet name
-      const walletNameMatch = messageText.match(/^([^\n:]+):/);
+      // Extract wallet name - typically at beginning of message before colon
+      const walletNameMatch = messageText.match(/^([^:\n]+):/);
       const walletName = walletNameMatch ? walletNameMatch[1].trim() : 'unknown';
       logger.debug('Wallet name match: ' + (walletName || 'none'));
       logger.debug('Wallet address: ' + (walletAddress || 'none'));
       
-      // Determine transaction type
+      // Determine transaction type - Buy or Sell
       let transactionType = null;
       if (messageText.includes('Token Buy')) {
         transactionType = 'buy';
@@ -36,11 +36,12 @@ const definedParser = {
       
       logger.debug('Transaction type: ' + (transactionType || 'none'));
       
+      // If not a buy/sell transaction, ignore
       if (!transactionType) {
         return null;
       }
       
-      // Extract coin address from the message (in backticks)
+      // Extract coin address - usually found in backticks
       let coinAddress = '';
       const addressMatch = messageText.match(/`([A-Za-z0-9]{32,44})`/);
       if (addressMatch && addressMatch[1]) {
@@ -48,99 +49,101 @@ const definedParser = {
         logger.debug('Coin address matched from backticks: ' + coinAddress);
       }
       
-      // Extract sent/received amounts
+      // Extract sent and received amounts
       let sentAmount = 0;
       let sentSymbol = '';
       let receivedAmount = 0;
       let receivedSymbol = '';
       
-      // For Defined format, extract amounts from the main text
-      const sentMatch = messageText.match(/➡️ Sent: ([\d,.]+) ([A-Z0-9a-z•\-\s]+?)(?:\n|$|\s*\()/);
+      // For Defined format, parse 'Sent' and 'Received' lines
+      const sentMatch = messageText.match(/➡️\s*Sent:\s*([\d.,]+)\s*([A-Z0-9a-z•\-\s]+)/i);
       if (sentMatch) {
         sentAmount = parseFloat(sentMatch[1].replace(/,/g, ''));
         sentSymbol = sentMatch[2].trim();
         logger.debug(`Sent: ${sentAmount} ${sentSymbol}`);
       }
       
-      // Check if there's a Received line or extract from token info URLs
-      const receivedMatch = messageText.match(/⬅️ Received: ([\d,.]+) ([A-Z0-9a-z•\-\s]+?)(?:\n|$|\s*\()/);
+      const receivedMatch = messageText.match(/⬅️\s*Received:\s*([\d.,]+)\s*([A-Z0-9a-z•\-\s]+)/i);
       if (receivedMatch) {
         receivedAmount = parseFloat(receivedMatch[1].replace(/,/g, ''));
         receivedSymbol = receivedMatch[2].trim();
         logger.debug(`Received: ${receivedAmount} ${receivedSymbol}`);
-      } else {
-        // Try to extract from the URLs or other context
-        // Look for token amount and symbol in the URLs or other parts of the message
-        const definedMatch = messageText.match(/www\.defined\.fi\/sol\/([^?]+)/);
-        if (definedMatch) {
-          // Extract token symbol from the URL or other context
-          // This is a fallback when the received line is not present
-          
-          // For buys, we need to determine what's being bought
-          if (transactionType === 'buy') {
-            // Extract from USD value context if available
-            const usdContextMatch = messageText.match(/\(([\d,.]+)\)\s*([A-Z0-9a-z]+)\s*\(\$([\d,.]+)\)/);
-            if (usdContextMatch) {
-              receivedAmount = parseFloat(usdContextMatch[1].replace(/,/g, ''));
-              receivedSymbol = usdContextMatch[2];
-            } else {
-              // Last resort: try to extract from after the address
-              const afterAddressMatch = messageText.match(/`[A-Za-z0-9]+`[^a-zA-Z0-9]*([\d,.]+)\s*([A-Z0-9a-z]+)/);
-              if (afterAddressMatch) {
-                receivedAmount = parseFloat(afterAddressMatch[1].replace(/,/g, ''));
-                receivedSymbol = afterAddressMatch[2];
+      }
+      
+      // If received data is missing, try to parse token info from other parts of the message
+      if (!receivedSymbol || receivedSymbol === '') {
+        // Try extracting from message context around the token address
+        const tokenInfoMatch = messageText.match(/Token\s+(Buy|Sell)[\s\S]*?([A-Z0-9]{2,10})\s*\(/i);
+        if (tokenInfoMatch) {
+          receivedSymbol = tokenInfoMatch[2].trim();
+          logger.debug(`Extracted token symbol from context: ${receivedSymbol}`);
+        }
+        
+        // If still not found and we have a coin address, try to extract from message entities
+        if ((!receivedSymbol || receivedSymbol === '') && coinAddress && typeof message === 'object' && message.entities) {
+          for (const entity of message.entities) {
+            if (entity.className === "MessageEntityTextUrl" && 
+                entity.url && 
+                entity.url.includes('defined.fi/sol/') && 
+                !entity.url.includes('So11111111111111111111111111111111111111112')) {
+              // Extract token symbol from the entity text
+              const tokenText = messageText.substring(entity.offset, entity.offset + entity.length).trim();
+              if (tokenText && tokenText.length > 0 && tokenText.length <= 10) {
+                receivedSymbol = tokenText;
+                logger.debug(`Extracted token symbol from URL entity: ${receivedSymbol}`);
+                break;
               }
             }
           }
         }
       }
       
-      // Extract USD value - can be after Sent or Received
+      // If received amount is missing, try to extract from USD value
+      if (receivedAmount === 0 || isNaN(receivedAmount)) {
+        // Try to find amount in parentheses after a USD value
+        const amountMatch = messageText.match(/\((?:\$|USD)[\d.,]+\)\s*(?:for)?\s*([\d.,]+)/i);
+        if (amountMatch) {
+          receivedAmount = parseFloat(amountMatch[1].replace(/,/g, ''));
+          logger.debug(`Extracted token amount from context: ${receivedAmount}`);
+        }
+      }
+      
+      // Extract USD value
       let usdValue = 0;
-      const usdMatch = messageText.match(/\(?\$([\d,.]+)\)?/);
+      const usdMatch = messageText.match(/(?:\$|USD)\s*([\d.,]+)/i);
       if (usdMatch) {
         usdValue = parseFloat(usdMatch[1].replace(/,/g, ''));
         logger.debug('USD value: ' + usdValue);
       }
       
       // Extract market cap
-      const marketCapMatch = messageText.match(/💎 Mkt\. Cap \(FDV\): \$([0-9,.kMB]+)/);
-      const marketCap = marketCapMatch ? this.parseMarketCap(marketCapMatch[1]) : 0;
+      const marketCapMatch = messageText.match(/(?:💎|Mkt\.?\s*Cap|MC)(?:\s*\(FDV\))?:\s*(?:\$|USD)?\s*([\d.,]+)([kKmMbB]?)/i);
+      const marketCap = marketCapMatch ? this.parseMarketCap(marketCapMatch[1], marketCapMatch[2]) : 0;
       logger.debug('Market cap: ' + marketCap);
       
-      // IMPORTANT: Determine the correct token symbol based on transaction type
+      // Determine token symbol and amount based on transaction type
       let tokenSymbol, tokenAmount, baseAmount, baseSymbol;
       
       if (transactionType === 'buy') {
-        // For buys: Base currency (SOL) -> Token
-        // If we don't have receivedSymbol, try to extract from URLs
-        if (!receivedSymbol) {
-          // Try to extract token symbol from Defined.fi URL
-          const tokenUrlMatch = messageText.match(/www\.defined\.fi\/sol\/[^?]+\?.*quoteToken=token1/);
-          if (tokenUrlMatch) {
-            // Extract from the link text or other context
-            const linkTextMatch = messageText.match(/\)\s*([A-Z0-9a-z]+)\s*\(/);
-            if (linkTextMatch) {
-              receivedSymbol = linkTextMatch[1];
-            }
-          }
-        }
-        
-        tokenSymbol = receivedSymbol ? receivedSymbol.toUpperCase() : 'UNKNOWN';
-        tokenAmount = receivedAmount || 0;
-        baseSymbol = sentSymbol ? sentSymbol.toUpperCase() : 'SOL';
+        // For buys: Base currency (SOL/USDC) -> Token
+        tokenSymbol = receivedSymbol ? this.cleanTokenSymbol(receivedSymbol) : 'UNKNOWN';
+        tokenAmount = receivedAmount;
+        baseSymbol = sentSymbol ? this.cleanTokenSymbol(sentSymbol) : 'SOL';
         baseAmount = sentAmount;
-      } else if (transactionType === 'sell') {
-        // For sells: Token -> Base currency (SOL)
-        tokenSymbol = sentSymbol ? sentSymbol.toUpperCase() : 'UNKNOWN';
+      } else { // sell
+        // For sells: Token -> Base currency (SOL/USDC)
+        tokenSymbol = sentSymbol ? this.cleanTokenSymbol(sentSymbol) : 'UNKNOWN';
         tokenAmount = sentAmount;
-        baseSymbol = receivedSymbol ? receivedSymbol.toUpperCase() : 'SOL';
+        baseSymbol = receivedSymbol ? this.cleanTokenSymbol(receivedSymbol) : 'SOL';
         baseAmount = receivedAmount;
       }
       
-      // Clean up token symbols
-      tokenSymbol = this.cleanTokenSymbol(tokenSymbol);
-      baseSymbol = this.cleanTokenSymbol(baseSymbol);
+      // If we still don't have a token symbol but have a coin address, 
+      // use the last part of the coin address as a placeholder
+      if ((tokenSymbol === 'UNKNOWN' || !tokenSymbol) && coinAddress) {
+        tokenSymbol = coinAddress.substring(0, 4).toUpperCase();
+        logger.debug(`Using prefix of coin address as token symbol: ${tokenSymbol}`);
+      }
       
       logger.info(`Creating transaction: ${transactionType} ${tokenAmount} ${tokenSymbol} for ${baseAmount} ${baseSymbol}`);
       
@@ -165,17 +168,35 @@ const definedParser = {
   
   /**
    * Extract wallet address from the message
-   * @param {string} message - Message text
+   * @param {string|Object} message - Message text or object
    * @returns {string|null} - Wallet address or null
    */
   extractWalletAddress(message) {
     try {
-      // Extract from Solscan address URL
-      const addressMatch = message.match(/https:\/\/solscan\.io\/address\/([A-Za-z0-9]{32,44})/);
+      // First check if message is an object with entities
+      if (typeof message === 'object' && message.entities) {
+        // Look for wallet address in TextUrl entities
+        for (const entity of message.entities) {
+          if (entity.className === "MessageEntityTextUrl" && entity.url) {
+            // Check for Solscan address URL
+            const match = entity.url.match(/solscan\.io\/address\/([A-Za-z0-9]{32,44})/);
+            if (match && match[1] && this.isValidSolanaAddress(match[1])) {
+              logger.debug(`Wallet address extracted from entity URL: ${match[1]}`);
+              return match[1];
+            }
+          }
+        }
+      }
+      
+      // Fallback to parsing the message text
+      let messageText = typeof message === 'string' ? message : message.text;
+      
+      // Check for Solscan address URL in text
+      const addressMatch = messageText.match(/solscan\.io\/address\/([A-Za-z0-9]{32,44})/);
       if (addressMatch && addressMatch[1]) {
         const candidateAddress = addressMatch[1];
         if (this.isValidSolanaAddress(candidateAddress)) {
-          logger.debug(`Wallet address extracted from Solscan URL: ${candidateAddress}`);
+          logger.debug(`Wallet address extracted from text URL: ${candidateAddress}`);
           return candidateAddress;
         }
       }
@@ -195,11 +216,12 @@ const definedParser = {
   cleanTokenSymbol(symbol) {
     if (!symbol) return 'UNKNOWN';
     
-    // Remove common suffixes and clean up
+    // Remove common decorations and clean up
     return symbol
-      .replace(/\s+/g, '')
-      .replace(/\(.*\)$/, '')
-      .replace(/^\$/, '')
+      .replace(/\s+/g, '')  // Remove spaces
+      .replace(/\(.*\)$/, '') // Remove anything in parentheses at end
+      .replace(/^\$/, '')   // Remove leading $ sign
+      .replace(/[^\w\-•]/g, '') // Remove non-word characters except dash and bullet
       .trim()
       .toUpperCase();
   },
@@ -217,22 +239,29 @@ const definedParser = {
   
   /**
    * Parse market cap string into a number
-   * @param {string} marketCapStr - Market cap string with suffixes
+   * @param {string} value - Market cap value as string
+   * @param {string} suffix - Market cap suffix (k/m/b)
    * @returns {number} - Parsed market cap value
    */
-  parseMarketCap(marketCapStr) {
+  parseMarketCap(value, suffix = '') {
     try {
-      const value = parseFloat(marketCapStr.replace(/[^0-9.]/g, ''));
+      const numValue = parseFloat(value.replace(/[^0-9.]/g, ''));
       
-      if (marketCapStr.includes('k') || marketCapStr.includes('K')) {
-        return value * 1000;
-      } else if (marketCapStr.includes('M')) {
-        return value * 1000000;
-      } else if (marketCapStr.includes('B')) {
-        return value * 1000000000;
+      if (!suffix) {
+        return numValue;
       }
       
-      return value;
+      suffix = suffix.toLowerCase();
+      
+      if (suffix === 'k') {
+        return numValue * 1000;
+      } else if (suffix === 'm') {
+        return numValue * 1000000;
+      } else if (suffix === 'b') {
+        return numValue * 1000000000;
+      }
+      
+      return numValue;
     } catch (error) {
       logger.error('Error parsing market cap:', error);
       return 0;

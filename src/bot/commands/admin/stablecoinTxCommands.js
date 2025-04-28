@@ -343,7 +343,7 @@ function formatMarketCap(marketCap) {
   } else if (marketCap >= 1000000) {
     return `${(marketCap / 1000000).toFixed(1)}M`;
   } else if (marketCap >= 1000) {
-    return `${(marketCap / 1000000).toFixed(1)}k`;
+    return `${(marketCap / 1000).toFixed(1)}k`;
   } else {
     return marketCap.toString();
   }

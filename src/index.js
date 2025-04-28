@@ -1,3 +1,4 @@
+// src/index.js
 require('dotenv').config();
 const logger = require('./utils/logger');
 const db = require('./db');
@@ -8,13 +9,16 @@ const transactionService = require('./db/services/transactionService');
 const cleanupService = require('./db/services/cleanupService');
 const queueManager = require('./services/queueService');
 const performanceMonitor = require('./utils/performanceMonitor');
+const shutdownManager = require('./utils/shutdownManager');
 
 /**
  * Main application entry point
  */
-
 async function startApp() {
   try {
+    // Initialize the shutdown manager
+    shutdownManager.init();
+    
     // Connect to MongoDB
     await db.connectToDatabase();
     logger.info('MongoDB connection established');
@@ -35,6 +39,16 @@ async function startApp() {
     // Start the forwarder
     const forwarder = await startForwarder();
     logger.info('Forwarder started successfully');
+
+    // Register MongoDB and queue manager for shutdown
+    shutdownManager.registerCallback(async () => {
+      logger.info('Closing MongoDB connection...');
+      await db.closeConnection(); // Make sure this method exists
+    }, 'mongodb');
+    
+    shutdownManager.registerCallback(() => {
+      queueManager.shutdown();
+    }, 'queueManager');
 
     // Setup periodic cleanup for transactions
     setInterval(async () => {
@@ -110,27 +124,6 @@ async function startApp() {
     }, 60000); // Check every minute
     
     logger.info('Application successfully started');
-    
-    // Handle cleanup
-    process.on('SIGINT', async () => {
-      logger.info('Application shutting down...');
-      if (forwarder && forwarder.stop) {
-        await forwarder.stop();
-      }
-      // Shut down the queue manager
-      queueManager.shutdown();
-      process.exit(0);
-    });
-    
-    process.on('SIGTERM', async () => {
-      logger.info('Application terminating...');
-      if (forwarder && forwarder.stop) {
-        await forwarder.stop();
-      }
-      // Shut down the queue manager
-      queueManager.shutdown();
-      process.exit(0);
-    });
     
   } catch (error) {
     logger.error('Failed to start application:', error);

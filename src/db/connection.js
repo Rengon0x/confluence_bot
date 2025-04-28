@@ -150,7 +150,21 @@ process.on('SIGINT', async () => {
     process.exit(0);
 });
 
-module.exports = {
+/**
+ * Close the MongoDB connection
+ */
+async function closeConnection() {
+    if (mongoClient) {
+      await mongoClient.close();
+      mongoClient = null;
+      db = null;
+      logger.info('MongoDB connection closed');
+    }
+  }
+  
+  // Add to module.exports
+  module.exports = {
     connectToDatabase,
-    getDatabase
-};
+    getDatabase,
+    closeConnection
+  };

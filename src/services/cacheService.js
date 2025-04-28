@@ -4,45 +4,45 @@ const config = require('../config/config');
 const logger = require('../utils/logger');
 
 /**
- * Service de cache unifié qui utilise soit Redis, soit NodeCache
- * Fournit une API unifiée indépendante de l'implémentation sous-jacente
+ * Unified cache service that uses either Redis or NodeCache
+ * Provides a unified API independent of the underlying implementation
  */
 class CacheService {
   constructor(options = {}) {
     this.useRedis = config.redis.enabled;
     this.prefix = options.prefix || '';
-    this.ttl = options.stdTTL || (config.confluence.windowMinutes * 60); // TTL par défaut en secondes
+    this.ttl = options.stdTTL || (config.confluence.windowMinutes * 60); // Default TTL in seconds
     
-    // Initialiser le cache approprié
+    // Initialize the appropriate cache
     if (this.useRedis) {
-      logger.info(`Initialisation du cache Redis avec préfixe '${this.prefix}'`);
+      logger.info(`Initializing Redis cache with prefix '${this.prefix}'`);
       this.cache = new RedisService({
         stdTTL: this.ttl,
         prefix: this.prefix
       });
     } else {
-      logger.info(`Initialisation du cache local (NodeCache) avec TTL de ${this.ttl} secondes`);
+      logger.info(`Initializing local cache (NodeCache) with TTL of ${this.ttl} seconds`);
       this.cache = new NodeCache({
         stdTTL: this.ttl,
         checkperiod: Math.min(this.ttl / 10, 600),
-        useClones: false  // Pour des performances optimales
+        useClones: false  // For optimal performance
       });
       
-      // Adapter l'API de NodeCache pour être compatible avec Redis
+      // Adapt NodeCache API to be compatible with Redis
       this.originalGet = this.cache.get.bind(this.cache);
       this.originalSet = this.cache.set.bind(this.cache);
       this.originalDel = this.cache.del.bind(this.cache);
       this.originalKeys = this.cache.keys.bind(this.cache);
       this.originalFlushAll = this.cache.flushAll.bind(this.cache);
       
-      // Surcharger les méthodes pour fournir une API compatible Promise
+      // Override methods to provide a Promise-compatible API
       this.cache.get = async (key) => this.originalGet(key);
       this.cache.set = async (key, value, ttl) => this.originalSet(key, value, ttl);
       this.cache.del = async (key) => this.originalDel(key);
       this.cache.keys = async () => this.originalKeys();
       this.cache.flushAll = async () => this.originalFlushAll();
       
-      // Ajouter l'API mget manquante
+      // Add missing mget API
       this.cache.mget = async (keys) => {
         const result = {};
         for (const key of keys) {
@@ -54,7 +54,7 @@ class CacheService {
         return result;
       };
       
-      // Ajouter l'API pour estimer la taille
+      // Add API to estimate size
       this.cache.estimateSize = async () => {
         const keys = this.originalKeys();
         let totalEntries = 0;
@@ -64,7 +64,7 @@ class CacheService {
           const value = this.originalGet(key);
           if (Array.isArray(value)) {
             totalEntries += value.length;
-            estimatedSizeBytes += JSON.stringify(value).length * 2; // Estimation approximative
+            estimatedSizeBytes += JSON.stringify(value).length * 2; // Approximate estimation
           } else {
             totalEntries += 1;
             estimatedSizeBytes += JSON.stringify(value).length * 2;
@@ -81,7 +81,7 @@ class CacheService {
   }
 
   /**
-   * Initialiser le cache Redis si nécessaire
+   * Initialize Redis cache if necessary
    */
   async initialize() {
     if (this.useRedis) {
@@ -91,69 +91,69 @@ class CacheService {
   }
 
   /**
-   * Définir une valeur dans le cache
-   * @param {string} key - Clé
-   * @param {any} value - Valeur à stocker
-   * @param {number} ttl - TTL en secondes (optionnel)
-   * @returns {Promise<boolean>} - Succès de l'opération
+   * Set a value in the cache
+   * @param {string} key - Key
+   * @param {any} value - Value to store
+   * @param {number} ttl - TTL in seconds (optional)
+   * @returns {Promise<boolean>} - Success status
    */
   async set(key, value, ttl) {
     return this.cache.set(key, value, ttl || this.ttl);
   }
 
   /**
-   * Récupérer une valeur du cache
-   * @param {string} key - Clé
-   * @returns {Promise<any>} - Valeur ou undefined si inexistante
+   * Get a value from the cache
+   * @param {string} key - Key
+   * @returns {Promise<any>} - Value or undefined if not exists
    */
   async get(key) {
     return this.cache.get(key);
   }
 
   /**
-   * Supprimer une clé du cache
-   * @param {string} key - Clé à supprimer
-   * @returns {Promise<boolean>} - Succès de l'opération
+   * Delete a key from the cache
+   * @param {string} key - Key to delete
+   * @returns {Promise<boolean>} - Success status
    */
   async del(key) {
     return this.cache.del(key);
   }
 
   /**
-   * Obtenir toutes les clés dans le cache
-   * @returns {Promise<string[]>} - Liste des clés
+   * Get all keys in the cache
+   * @returns {Promise<string[]>} - List of keys
    */
   async keys() {
     return this.cache.keys();
   }
 
   /**
-   * Obtenir plusieurs valeurs en une seule opération
-   * @param {string[]} keys - Liste des clés
-   * @returns {Promise<Object>} - Mapping clé/valeur
+   * Get multiple values in a single operation
+   * @param {string[]} keys - List of keys
+   * @returns {Promise<Object>} - Key/value mapping
    */
   async mget(keys) {
     return this.cache.mget(keys);
   }
 
   /**
-   * Vider complètement le cache
-   * @returns {Promise<boolean>} - Succès de l'opération
+   * Clear the entire cache
+   * @returns {Promise<boolean>} - Success status
    */
   async flushAll() {
     return this.cache.flushAll();
   }
 
   /**
-   * Estimer la taille du cache
-   * @returns {Promise<Object>} - Informations sur la taille du cache
+   * Estimate the cache size
+   * @returns {Promise<Object>} - Information about cache size
    */
   async estimateSize() {
     return this.cache.estimateSize();
   }
 
   /**
-   * Fermer la connexion au cache
+   * Close the cache connection
    */
   async close() {
     if (this.useRedis) {

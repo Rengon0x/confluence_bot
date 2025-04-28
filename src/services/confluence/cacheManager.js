@@ -39,59 +39,91 @@ const cacheManager = {
   },
 
   /**
-   * Clean transactions that are too old from cache
-   * @returns {Promise<void>}
-   */
-  async cleanOldTransactions() {
+ * Clean transactions that are too old from cache
+ * @returns {Promise<void>}
+ */
+async cleanOldTransactions() {
     try {
       const keys = await this.transactionsCache.keys();
       const now = new Date();
       let totalRemoved = 0;
       let totalKept = 0;
       
+      // Group keys by groupId for more efficient processing
+      const groupKeys = {};
+      for (const key of keys) {
+        // Skip keys that don't match our expected format with groupId as first part
+        if (!key || !key.includes('_')) continue;
+        
+        const groupId = key.split('_')[0]; // Extract groupId from key
+        if (!groupKeys[groupId]) {
+          groupKeys[groupId] = [];
+        }
+        groupKeys[groupId].push(key);
+      }
+      
       const cleanupPromises = [];
       
-      for (const key of keys) {
-        // Extract groupId from key to use its specific window minutes
-        const groupId = key.split('_')[0];
-        
+      // Process each group separately with its own window setting
+      for (const [groupId, groupKeyList] of Object.entries(groupKeys)) {
         cleanupPromises.push(
           (async () => {
-            // Get the window minutes for this specific group
-            const windowMinutes = await groupSettingsManager.getWindowMinutesForGroup(groupId);
-            const transactions = await this.transactionsCache.get(key);
-            
-            if (!transactions) return;
-            
-            const originalCount = transactions.length;
-            
-            // Filter to keep only transactions within the group's time window
-            const filteredTransactions = transactions.filter(tx => {
-              const diffMs = now - new Date(tx.timestamp);
-              const diffMinutes = diffMs / 60000;
-              return diffMinutes <= windowMinutes;
-            });
-            
-            const removed = originalCount - filteredTransactions.length;
-            totalRemoved += removed;
-            totalKept += filteredTransactions.length;
-            
-            if (filteredTransactions.length > 0) {
-              await this.transactionsCache.set(key, filteredTransactions);
-              if (removed > 0) {
-                logger.debug(`Cleaned ${removed} old transactions for ${key}, ${filteredTransactions.length} remain`);
+            try {
+              // Get the window minutes for this specific group
+              const windowMinutes = await groupSettingsManager.getWindowMinutesForGroup(groupId);
+              logger.debug(`Using window of ${windowMinutes} minutes for group ${groupId}`);
+              
+              // Calculate cutoff time based on group's window
+              const cutoffTime = new Date(now.getTime() - (windowMinutes * 60 * 1000));
+              
+              // Process each key for this group
+              for (const key of groupKeyList) {
+                const transactions = await this.transactionsCache.get(key);
+                
+                if (!Array.isArray(transactions)) {
+                  logger.debug(`Skipping key ${key} as transactions is not an array`);
+                  continue; // Skip if not an array
+                }
+                
+                const originalCount = transactions.length;
+                
+                // Filter transactions based on group's time window
+                const filteredTransactions = transactions.filter(tx => {
+                  try {
+                    const txTime = new Date(tx.timestamp);
+                    return txTime >= cutoffTime;
+                  } catch (err) {
+                    logger.warn(`Error processing transaction timestamp in key ${key}: ${err.message}`);
+                    return false; // Remove problematic transactions
+                  }
+                });
+                
+                const removedCount = originalCount - filteredTransactions.length;
+                totalRemoved += removedCount;
+                totalKept += filteredTransactions.length;
+                
+                if (removedCount > 0) {
+                  logger.debug(`Cleaned ${removedCount} old transactions for key ${key} (window: ${windowMinutes}m)`);
+                }
+                
+                // Update or delete the key
+                if (filteredTransactions.length > 0) {
+                  await this.transactionsCache.set(key, filteredTransactions);
+                } else {
+                  await this.transactionsCache.del(key);
+                  logger.debug(`Removed empty key ${key} from cache`);
+                }
               }
-            } else {
-              await this.transactionsCache.del(key);
-              logger.debug(`Removed empty key ${key} from cache`);
+            } catch (innerError) {
+              logger.error(`Error cleaning transactions for group ${groupId}: ${innerError.message}`);
             }
           })()
         );
       }
       
-      // Wait for all cleanups to complete
+      // Wait for all group cleanups to complete
       await Promise.all(cleanupPromises);
-
+      
       // Check the total size and clean if necessary
       const cacheStats = await this.estimateCacheSize();
       

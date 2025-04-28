@@ -10,8 +10,6 @@ const { updateMonitoredTrackers } = require('./utils');
  * Initialize and start the forwarder
  */
 async function startForwarder() {
-  logger.info('Starting Multi-Tracker Forwarder with Client Pool...');
-  
   try {
     // Initialize and connect all Telegram clients
     await connectAllClients();
@@ -29,6 +27,12 @@ async function startForwarder() {
     const updateInterval = setInterval(updateMonitoredTrackers, 60000); // Check every minute
     
     logger.info('Forwarder is now running with client pool.');
+    
+    // Register shutdown callback
+    shutdownManager.registerCallback(async () => {
+      clearInterval(updateInterval);
+      await stopForwarder();
+    }, 'forwarder');
     
     return {
       stop: async () => {
@@ -55,27 +59,6 @@ async function stopForwarder() {
   await disconnectAllClients();
   
   logger.info('Forwarder stopped.');
-}
-
-// Handle application shutdown
-process.on('SIGINT', async () => {
-  logger.info('Received SIGINT signal');
-  await stopForwarder();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  logger.info('Received SIGTERM signal');
-  await stopForwarder();
-  process.exit(0);
-});
-
-// Start the forwarder if this file is run directly
-if (require.main === module) {
-  startForwarder().catch(error => {
-    logger.error('Fatal error:', error);
-    process.exit(1);
-  });
 }
 
 module.exports = {

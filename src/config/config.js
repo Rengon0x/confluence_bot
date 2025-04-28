@@ -24,8 +24,8 @@ module.exports = {
     ]
   },
   confluence: {
-    minWallets: parseInt(process.env.MIN_WALLETS_FOR_CONFLUENCE || '2', 10),
-    windowMinutes: parseInt(process.env.CONFLUENCE_WINDOW_MINUTES || '120', 10)
+    minWallets: 2,
+    windowMinutes: 120
   },
   mongodb: {
     uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/confluence-bot'

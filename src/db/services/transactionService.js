@@ -374,25 +374,51 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
   },
 
   /**
-   * Clean up old transactions (optional, as TTL index handles this)
-   * @param {number} olderThanHours - Delete transactions older than this many hours
+   * Clean up old transactions based on each group's window setting
    */
-  async cleanupOldTransactions(olderThanHours = 48) {
+  async cleanupOldTransactions() {
     try {
       const collection = await this.getCollection();
       
-      const cutoffTime = new Date(Date.now() - (olderThanHours * 60 * 60 * 1000));
+      // Get all unique group IDs from the transactions
+      const groupIds = await collection.distinct('groupId');
       
-      // Using timestamp index for efficient cleanup
-      const result = await collection.deleteMany({
-        timestamp: { $lt: cutoffTime }
-      });
-      
-      if (result.deletedCount > 0) {
-        logger.info(`Cleaned up ${result.deletedCount} old transactions`);
+      if (!groupIds || groupIds.length === 0) {
+        logger.debug('No groups found for transaction cleanup');
+        return 0;
       }
-
-      // Check size and perform more aggressive cleanup if necessary
+      
+      // Import the group service directly here to avoid circular imports
+      const groupService = require('../services/groupService');
+      
+      let totalDeleted = 0;
+      
+      // Process each group with its own window setting
+      for (const groupId of groupIds) {
+        try {
+          // Get group settings to get the specific window minutes for this group
+          const groupSettings = await groupService.getSettings(groupId);
+          const windowMinutes = groupSettings?.windowMinutes || config.confluence.windowMinutes;
+          
+          // Calculate cutoff time for this specific group
+          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+          
+          // Delete transactions older than the cutoff time for this group
+          const result = await collection.deleteMany({
+            groupId: groupId,
+            timestamp: { $lt: cutoffTime }
+          });
+          
+          if (result.deletedCount > 0) {
+            logger.info(`Cleaned up ${result.deletedCount} old transactions for group ${groupId} (window: ${windowMinutes} minutes)`);
+            totalDeleted += result.deletedCount;
+          }
+        } catch (groupError) {
+          logger.error(`Error cleaning transactions for group ${groupId}: ${groupError.message}`);
+        }
+      }
+      
+      // Check the total size and perform more aggressive cleanup if necessary
       const collectionSize = await this.getCollectionSize();
       
       if (collectionSize && collectionSize.sizeMB > 250) { 
@@ -439,13 +465,13 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
           
           // Wait for all group cleanups to complete
           const results = await Promise.all(cleanupPromises);
-          const totalRemoved = results.reduce((sum, count) => sum + count, 0);
+          const totalRemovedForSpace = results.reduce((sum, count) => sum + count, 0);
           
           // If group-based cleanup wasn't sufficient, fall back to removing oldest transactions
-          if (totalRemoved < excessCount * 0.5) {
-            logger.info(`Group-based cleanup removed ${totalRemoved} transactions, continuing with timestamp-based cleanup`);
+          if (totalRemovedForSpace < excessCount * 0.5) {
+            logger.info(`Group-based cleanup removed ${totalRemovedForSpace} transactions, continuing with timestamp-based cleanup`);
             
-            const remainingToRemove = excessCount - totalRemoved;
+            const remainingToRemove = excessCount - totalRemovedForSpace;
             const oldestTransactions = await collection.find({})
               .sort({ timestamp: 1 })
               .limit(remainingToRemove)
@@ -458,15 +484,18 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
               });
               
               logger.info(`Additional timestamp-based cleanup removed ${deleteResult.deletedCount} oldest transactions`);
-              totalRemoved += deleteResult.deletedCount;
+              totalDeleted += deleteResult.deletedCount;
             }
           }
           
-          logger.info(`Emergency cleanup completed: removed ${totalRemoved} transactions in total`);
+          logger.info(`Emergency cleanup completed: removed ${totalDeleted} transactions in total`);
         }
       }
+
+      return totalDeleted;
     } catch (error) {
       logger.error(`Error in transactionService.cleanupOldTransactions: ${error.message}`);
+      return 0;
     }
   }
 };

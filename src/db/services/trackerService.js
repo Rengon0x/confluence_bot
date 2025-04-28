@@ -46,6 +46,10 @@ const trackerService = {
           updatedAt: now
         });
         
+        // Log the inserted document
+        const insertedDoc = await collection.findOne({ _id: result.insertedId });
+        logger.debug(`Inserted tracker document: ${JSON.stringify(insertedDoc)}`);
+        
         tracker = {
           _id: result.insertedId,
           name,

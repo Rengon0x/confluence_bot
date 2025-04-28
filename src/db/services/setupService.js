@@ -19,7 +19,7 @@ const setupService = {
   async registerTracking(trackerName, groupId, groupName, trackerType = 'cielo', userId = null, username = null) {
     try {
       // First check how many trackers are already configured for this group
-      const existingTrackers = await getTrackersForGroup(groupId);
+      const existingTrackers = await this.getTrackersForGroup(groupId);
     
       // If already 5 trackers, deny adding a new one
       if (existingTrackers && existingTrackers.length >= 5) {
@@ -35,7 +35,7 @@ const setupService = {
       }
       
       // Find or create tracker specific to this group with type
-      const tracker = await trackerService.findOrCreate(trackerName, groupId, trackerType);
+      const tracker = await trackerService.findOrCreate(trackerName, groupId, trackerType, userId, username);
       if (!tracker) {
         logger.error(`Failed to create or find tracker ${trackerName} for group ${groupId}`);
         return { success: false, reason: 'TRACKER_ERROR' };
