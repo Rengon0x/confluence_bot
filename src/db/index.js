@@ -13,6 +13,8 @@ module.exports = {
   // Connection
   connectToDatabase,
   getDatabase,
+
+  closeConnection: require('./connection').closeConnection,
   
   // Services
   trackerService,

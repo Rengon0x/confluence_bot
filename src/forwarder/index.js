@@ -5,6 +5,7 @@ const db = require('../db');
 const { connectAllClients, disconnectAllClients } = require('./clientPool');
 const { setupMessageHandler } = require('./messageHandler');
 const { updateMonitoredTrackers } = require('./utils');
+const shutdownManager = require('../utils/shutdownManager');
 
 /**
  * Initialize and start the forwarder
