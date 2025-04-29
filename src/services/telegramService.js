@@ -32,47 +32,85 @@ const telegramMessageService = {
       
       // Create two arrays for wallets - preserving the original if wallet has both buy and sell
       const displayWallets = [];
+      const processedWallets = new Set();
       
-      // Process each wallet to determine how it should be displayed
-      confluence.wallets.forEach(wallet => {
-        // Calculate transaction stats for this wallet
-        const buyTransactions = wallet.transactions ? wallet.transactions.filter(tx => tx.type === 'buy') : [];
-        const sellTransactions = wallet.transactions ? wallet.transactions.filter(tx => tx.type === 'sell') : [];
-        
-        if (buyTransactions.length > 0) {
-          // Create a buy display for this wallet
-          const buyDisplay = {
-            walletName: wallet.walletName,
-            baseAmount: buyTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
-            baseSymbol: buyTransactions[0].baseSymbol || 'SOL',
-            marketCap: calculateWeightedAverage(buyTransactions, 'marketCap', 'baseAmount'),
-            type: 'buy',
-            // Only mark as updated if it's actually a new buy transaction
-            isUpdated: wallet.isUpdated && wallet.type === 'buy' && 
-                       isRecentlyUpdated(wallet, buyTransactions)
-          };
-          displayWallets.push(buyDisplay);
-        }
-        
-        if (sellTransactions.length > 0) {
-          // Also create a sell display for this wallet if it has sell transactions
-          const sellDisplay = {
-            walletName: wallet.walletName,
-            baseAmount: sellTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
-            baseSymbol: sellTransactions[0].baseSymbol || 'SOL', 
-            marketCap: calculateWeightedAverage(sellTransactions, 'marketCap', 'baseAmount'),
-            type: 'sell',
-            // Only mark as updated if it's actually a new sell transaction
-            isUpdated: wallet.isUpdated && wallet.type === 'sell' &&
-                       isRecentlyUpdated(wallet, sellTransactions)
-          };
-          displayWallets.push(sellDisplay);
+       // Process each wallet to determine how it should be displayed
+    confluence.wallets.forEach(wallet => {
+      // Identifiant unique pour ce portefeuille (adresse ou nom si pas d'adresse)
+      const walletId = wallet.walletAddress || wallet.walletName;
+      
+      // Si ce portefeuille a déjà été traité, passez au suivant
+      if (processedWallets.has(walletId)) {
+        return;
+      }
+      processedWallets.add(walletId);
+      
+      // Rassembler toutes les transactions de ce portefeuille
+      // en parcourant tous les wallets pour trouver celles du même portefeuille
+      const allTransactions = [];
+      confluence.wallets.forEach(w => {
+        const wId = w.walletAddress || w.walletName;
+        if (wId === walletId && w.transactions) {
+          allTransactions.push(...w.transactions);
         }
       });
       
-      // Group and sort the display wallets
-      const buyDisplays = displayWallets.filter(w => w.type === 'buy');
-      const sellDisplays = displayWallets.filter(w => w.type === 'sell');
+      // Séparer les transactions d'achat et de vente
+      const buyTransactions = allTransactions.filter(tx => tx.type === 'buy');
+      const sellTransactions = allTransactions.filter(tx => tx.type === 'sell');
+      
+      // Le reste du code reste identique...
+      if (buyTransactions.length > 0) {
+        // Create a buy display for this wallet
+        const buyDisplay = {
+          walletName: wallet.walletName,
+          baseAmount: buyTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
+          baseSymbol: buyTransactions[0].baseSymbol || 'SOL',
+          marketCap: calculateWeightedAverage(buyTransactions, 'marketCap', 'baseAmount'),
+          type: 'buy',
+          isUpdated: wallet.isUpdated && wallet.type === 'buy' && 
+                     isRecentlyUpdated(wallet, buyTransactions)
+        };
+        displayWallets.push(buyDisplay);
+      }
+      
+      if (sellTransactions.length > 0) {
+        // Also create a sell display for this wallet if it has sell transactions
+        const sellDisplay = {
+          walletName: wallet.walletName,
+          baseAmount: sellTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
+          baseSymbol: sellTransactions[0].baseSymbol || 'SOL', 
+          marketCap: calculateWeightedAverage(sellTransactions, 'marketCap', 'baseAmount'),
+          type: 'sell',
+          isUpdated: wallet.isUpdated && wallet.type === 'sell' &&
+                     isRecentlyUpdated(wallet, sellTransactions)
+        };
+        displayWallets.push(sellDisplay);
+      }
+    });
+      
+      // We want to preserve both buy and sell displays for the same wallet
+      // So we'll deduplicate by wallet + type instead of just wallet
+      const walletsByTypeAndName = {};
+      
+      displayWallets.forEach(wallet => {
+        // Create a unique key for each wallet+type combination
+        const walletKey = `${wallet.walletName}_${wallet.type}`;
+        
+        // If we haven't seen this wallet+type yet, add it
+        if (!walletsByTypeAndName[walletKey]) {
+          walletsByTypeAndName[walletKey] = wallet;
+        }
+        // If this is a newer transaction from the same wallet+type, replace the previous one
+        else if (wallet.isUpdated && !walletsByTypeAndName[walletKey].isUpdated) {
+          walletsByTypeAndName[walletKey] = wallet;
+        }
+      });
+      
+      // Convert back to arrays for buy/sell grouping
+      const uniqueWalletDisplays = Object.values(walletsByTypeAndName);
+      const buyDisplays = uniqueWalletDisplays.filter(w => w.type === 'buy');
+      const sellDisplays = uniqueWalletDisplays.filter(w => w.type === 'sell');
       
       // Format wallets for display
       const formatWallet = wallet => {
@@ -108,9 +146,8 @@ const telegramMessageService = {
         return `${updateEmoji}${walletEmoji} ${displayName}: ${baseAmount}${baseSymbol}@${formattedMC} mcap`;
       };
       
-      // Add buy wallets to message - sort by the most recent transaction first
+      // Add buy wallets to message - keep original order for buys
       if (buyDisplays.length > 0) {
-        // Keep original order for buys
         buyDisplays.forEach(wallet => {
           message += formatWallet(wallet) + '\n';
         });

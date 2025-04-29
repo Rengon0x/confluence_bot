@@ -1,15 +1,21 @@
 // src/bot/commands/user/recapCommand.js
 const logger = require('../../../utils/logger');
 const recapService = require('../../../services/recapService');
+const { formatTimeframe, sendRecapMessage } = require('../../../utils/recapFormatter');
 
 /**
- * Command /recap - Shows a summary of first confluences per token
+ * Command /recap - Shows performance summary of confluences with optional timeframe
+ * Examples: 
+ * - /recap     (default 24h timeframe)
+ * - /recap 6h  (6 hour timeframe)
+ * - /recap 3d  (3 day timeframe)
+ * - /recap 30m (30 minute timeframe)
  */
 const recapCommand = {
   name: 'recap',
-  regex: /\/recap(?:@\w+)?(?:\s+peak)?/,
-  description: 'View a summary of confluences from the last 48 hours',
-  handler: async (bot, msg) => {
+  regex: /\/recap(?:@\w+)?(?:\s+(\d+)([hmd]))?/,
+  description: 'View performance summary of recent confluences with optional timeframe',
+  handler: async (bot, msg, match) => {
     try {
       // Only respond in groups
       if (msg.chat.type !== 'group' && msg.chat.type !== 'supergroup') {
@@ -19,23 +25,36 @@ const recapCommand = {
       
       const chatId = msg.chat.id;
       
-      // Check if peak data was requested
-      const includePeakData = msg.text.toLowerCase().includes('peak');
+      // Parse timeframe parameter if provided (default to 24h)
+      let timeframeHours = 24;
       
-      // Inform the user that we're processing their request
-      let loadingMessage = "⏳ Analyzing transactions... This may take a moment.";
-      if (includePeakData) {
-        loadingMessage = "⏳ Analyzing transactions and fetching peak market cap data... This may take a minute or two.";
+      if (match && match[1] && match[2]) {
+        const value = parseInt(match[1]);
+        const unit = match[2];
+        
+        if (unit === 'h') timeframeHours = value;
+        else if (unit === 'd') timeframeHours = value * 24;
+        else if (unit === 'm') timeframeHours = value / 60;
       }
       
-      const loadingMsg = await bot.sendMessage(chatId, loadingMessage);
+      // Limit timeframe to reasonable values (min 1h, max 7d)
+      timeframeHours = Math.max(1, Math.min(timeframeHours, 168));
       
-      // Get confluences for this group
-      const confluences = await recapService.getFirstConfluencesPerToken(chatId.toString(), includePeakData);
+      // Inform the user that we're analyzing data
+      const loadingMsg = await bot.sendMessage(
+        chatId, 
+        `⏳ Analyzing performance for the last ${formatTimeframe(timeframeHours)}... This may take a moment.`
+      );
       
-      if (confluences.length === 0) {
+      // Get performance data for this timeframe
+      const performanceData = await recapService.getPerformanceData(
+        chatId.toString(), 
+        timeframeHours
+      );
+      
+      if (!performanceData || performanceData.confluences.length === 0) {
         await bot.editMessageText(
-          "No confluences detected in the last 48 hours.",
+          `No confluences detected in the last ${formatTimeframe(timeframeHours)}.`,
           {
             chat_id: chatId,
             message_id: loadingMsg.message_id
@@ -44,25 +63,21 @@ const recapCommand = {
         return;
       }
       
-      // Format the message with results
-      const recapMessage = recapService.formatRecapMessage(confluences, includePeakData);
-      
-      // Send or edit the message
-      await bot.editMessageText(
-        recapMessage,
-        {
-          chat_id: chatId,
-          message_id: loadingMsg.message_id,
-          parse_mode: 'Markdown'
-        }
+      // Send the recap message
+      await sendRecapMessage(
+        bot, 
+        chatId, 
+        loadingMsg.message_id, 
+        performanceData, 
+        timeframeHours
       );
       
-      logger.info(`Recap command executed for group ${chatId}, ${confluences.length} confluences displayed, peak data: ${includePeakData}`);
+      logger.info(`Recap command executed for group ${chatId}, timeframe: ${timeframeHours}h, ${performanceData.confluences.length} confluences analyzed`);
     } catch (error) {
       logger.error(`Error in recap command: ${error.message}`);
       bot.sendMessage(
         msg.chat.id,
-        `❌ An error occurred while analyzing confluences: ${error.message}`
+        `❌ An error occurred while analyzing performance: ${error.message}`
       );
     }
   }

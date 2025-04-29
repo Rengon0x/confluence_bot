@@ -61,7 +61,7 @@ const TrackersCommand = {
       message += `• All transaction history related to this tracker\n`;
       message += `• All cached data for this tracker\n\n`;
       
-      message += `Use \`/remove @trackername\` or click the remove button to remove a specific tracker.`;
+      message += `Click the remove button below to remove a specific tracker.`;
       
       bot.sendMessage(
         chatId,

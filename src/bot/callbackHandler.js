@@ -1,3 +1,4 @@
+// src/bot/callbackHandler.js
 const logger = require('../utils/logger');
 const config = require('../config/config');
 const helpers = require('./helpers');
@@ -15,6 +16,159 @@ function registerCallbackHandlers(bot) {
     
     // Acknowledge the callback query
     bot.answerCallbackQuery(query.id);
+    
+    // Handle forwarder explanation
+    if (data === 'explain_forwarders') {
+      const forwarder1Username = config.telegram.forwarders?.[0]?.forwarderUsername || 'YourForwarderUsername';
+      const forwarder2Username = config.telegram.forwarders?.[1]?.forwarderUsername || 'YourBackupForwarderUsername';
+      
+      // Create back button
+      const backButton = {
+        inline_keyboard: [[{
+          text: "🔙 Back to main help",
+          callback_data: "back_to_help"
+        }]]
+      };
+      
+      try {
+        await bot.editMessageText(
+          `*Why Forwarder Accounts Are Needed*\n\n` +
+          `Due to Telegram API limitations, regular bots cannot read messages from other bots or users. To overcome this:\n\n` +
+          
+          `1️⃣ The forwarder accounts (@${forwarder1Username} and @${forwarder2Username}) are user accounts managed by code.\n\n` +
+          
+          `2️⃣ These forwarder accounts can see all messages in your group, including those from wallet trackers.\n\n` +
+          
+          `3️⃣ When they detect wallet transactions, they forward this data to our system for confluence analysis.\n\n` +
+          
+          `4️⃣ This setup is necessary because Telegram doesn't allow bots to directly read messages from other bots.\n\n` +
+          
+          `*Security Notes:*\n` +
+          `• The forwarders only process wallet tracker messages for confluence detection\n` +
+          `• They ignore all other conversations in your group\n` +
+          `• Your privacy is important - no message content is stored except transaction data\n` +
+          `• We recommend using them in a dedicated tracking group\n\n` +
+          
+          `*Why Two Forwarders?*\n` +
+          `@${forwarder2Username} serves as a backup if the primary forwarder experiences connection issues.`,
+          {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            parse_mode: 'Markdown',
+            reply_markup: backButton
+          }
+        );
+      } catch (error) {
+        logger.error(`Error displaying forwarder explanation: ${error.message}`);
+      }
+      
+      return;
+    }
+    
+    // Handle "back to help" button
+    if (data === 'back_to_help') {
+      const forwarder1Username = config.telegram.forwarders?.[0]?.forwarderUsername || 'YourForwarderUsername';
+      const forwarder2Username = config.telegram.forwarders?.[1]?.forwarderUsername || 'YourBackupForwarderUsername';
+      
+      // Create explanation button again
+      const explainButton = {
+        inline_keyboard: [[{
+          text: "❓ Why do I need to add NoesisWatcher accounts?",
+          callback_data: "explain_forwarders"
+        }]]
+      };
+      
+      // Check if we're in a help or start message
+      const messageText = query.message.text;
+      
+      if (messageText.includes('CONFLUENCE DETECTION BOT - HELP GUIDE') || messageText.includes('CONFLUENCE DETECTION BOT - COMMANDS')) {
+        // It's a help message
+        const helpText = 
+          `🤖 *Confluence Detection Bot - Commands*\n\n` +
+          
+          `*Available Commands:*\n` +
+          `/setup - Start monitoring a new tracker\n` +
+          `/trackers - View and manage active trackers\n` +
+          `/stop - Stop all monitoring in this group\n` +
+          `/status - Check active monitoring status\n` +
+          `/settings - Configure detection settings\n` +
+          `/recap - View performance of recent confluences\n` +
+          `/quickrecap - View quick ATH summary\n` +
+          `/help - Show this help message\n\n` +
+          
+          `*Supported Tracker Types:*\n` +
+          `• Cielo • Defined • Ray\n\n` +
+          
+          `*Tips:*\n` +
+          `• Monitor multiple trackers for better results\n` +
+          `• Default: 2+ wallets buying same token in 60 minutes\n` +
+          `• Bot requires @${forwarder1Username} and @${forwarder2Username} as admins\n\n` +
+          
+          `For support: @${config.supportContact}`;
+        
+        await bot.editMessageText(helpText, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          parse_mode: 'Markdown',
+          reply_markup: explainButton
+        });
+      } else {
+        // Assume it's a start message - determine if group or private
+        if (query.message.chat.type === 'group' || query.message.chat.type === 'supergroup') {
+          // Group chat
+          const firstName = query.message.chat.first_name || 'there';
+          
+          await bot.editMessageText(
+            `👋 Hello ${firstName}!\n\n` +
+            `*What this bot does:*\n` +
+            `I detect when multiple wallets buy or sell the same cryptocurrency within a set time period (confluence), helping you spot trending tokens early.\n\n` +
+            
+            `*Quick setup:*\n` +
+            `1️⃣ Make me an admin in this group\n` +
+            `2️⃣ Add @${forwarder1Username} and make it admin\n` +
+            `3️⃣ Type /setup and follow the prompts\n\n` +
+            
+            `*Recommended:* Also add @${forwarder2Username} as admin (backup system).\n\n` +
+            
+            `Type /help for all available commands.`,
+            {
+              chat_id: chatId,
+              message_id: query.message.message_id,
+              parse_mode: 'Markdown',
+              reply_markup: explainButton
+            }
+          );
+        } else {
+          // Private chat
+          const firstName = query.from.first_name || 'there';
+          
+          await bot.editMessageText(
+            `👋 Hello ${firstName}!\n\n` +
+            `*What this bot does:*\n` +
+            `I monitor wallet trackers and alert you when multiple wallets buy or sell the same cryptocurrency within a specific time period (confluence), helping you spot trending tokens early.\n\n` +
+            
+            `*Setup in 3 steps:*\n` +
+            `1️⃣ Add me to your Telegram group\n` +
+            `2️⃣ Add @${forwarder1Username} to the group and make both of us admins\n` +
+            `3️⃣ Type /setup in the group\n\n` +
+            
+            `*Recommended:* Also add @${forwarder2Username} as admin (backup system).\n\n` +
+            
+            `*Tip:* You can monitor multiple trackers in the same group for more data!\n\n` +
+            
+            `Type /help for all available commands.`,
+            {
+              chat_id: chatId,
+              message_id: query.message.message_id,
+              parse_mode: 'Markdown',
+              reply_markup: explainButton
+            }
+          );
+        }
+      }
+      
+      return;
+    }
     
     // Handle tracker type selection
     if (data.startsWith('set_tracker_type:')) {
@@ -36,8 +190,6 @@ function registerCallbackHandlers(bot) {
           userId.toString(),
           query.from.username
         );
-
-        logger.debug(`Setting up tracker with userId: ${userId} and username: ${query.from.username}`);
         
         if (result.success) {
           const groupSettings = await db.getGroupSettings(chatId.toString());
@@ -96,8 +248,8 @@ function registerCallbackHandlers(bot) {
       const confirmKeyboard = {
         inline_keyboard: [
           [
-            { text: '⚠️ Yes, remove and delete all data', callback_data: `confirm_remove_${trackerName}` },
-            { text: '❌ Cancel', callback_data: 'cancel_remove' }
+            { text: "⚠️ Yes, remove and delete all data", callback_data: `confirm_remove_${trackerName}` },
+            { text: "❌ Cancel", callback_data: 'cancel_remove' }
           ]
         ]
       };
@@ -169,7 +321,7 @@ function registerCallbackHandlers(bot) {
               
               message += `Total trackers: ${trackers.length}\n\n`;
               message += `⚠️ *WARNING:* Removing a tracker will delete all associated data.\n\n`;
-              message += `Use \`/remove @trackername\` or click the remove button to remove a specific tracker.`;
+              message += `Click the remove button below to remove a specific tracker.`;
               
               bot.sendMessage(chatId, message, {
                 parse_mode: 'Markdown',
@@ -238,7 +390,7 @@ function registerCallbackHandlers(bot) {
         
         message += `Total trackers: ${trackers.length}\n\n`;
         message += `⚠️ *WARNING:* Removing a tracker will delete all associated data.\n\n`;
-        message += `Use \`/remove @trackername\` or click the remove button to remove a specific tracker.`;
+        message += `Click the remove button below to remove a specific tracker.`;
         
         bot.editMessageText(message, {
           chat_id: chatId,
