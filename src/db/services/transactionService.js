@@ -398,6 +398,11 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
         try {
           // Get group settings to get the specific window minutes for this group
           const groupSettings = await groupService.getSettings(groupId);
+          
+          // Import config here to avoid circular dependencies
+          const config = require('../../../config/config');
+          
+          // Use group-specific settings or default from config
           const windowMinutes = groupSettings?.windowMinutes || config.confluence.windowMinutes;
           
           // Calculate cutoff time for this specific group

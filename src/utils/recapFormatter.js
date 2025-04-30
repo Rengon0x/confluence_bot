@@ -32,12 +32,33 @@ function getPerformanceEmoji(percentage) {
     return '🚀'; // Rocket for 100%+ gains
   } else if (percentage >= 50) {
     return '📈'; // Chart up for 50%+ gains
-  } else if (percentage >= 0) {
+  } else if (percentage > 0) {
     return '➡️'; // Sideways for 0-50% gains
+  } else if (percentage === 0) {
+    return '⏹️'; // No change
   } else if (percentage >= -50) {
     return '↘️'; // Down-right for small losses
   } else {
     return '📉'; // Chart down for big losses
+  }
+}
+
+/**
+ * Format market cap for display
+ * @param {number} marketCap - Market cap value
+ * @returns {string} - Formatted market cap
+ */
+function formatMarketCap(marketCap) {
+  if (!marketCap || isNaN(marketCap)) return "?";
+  
+  if (marketCap >= 1000000000) {
+    return `${(marketCap / 1000000000).toFixed(1)}B`;
+  } else if (marketCap >= 1000000) {
+    return `${(marketCap / 1000000).toFixed(1)}M`;
+  } else if (marketCap >= 1000) {
+    return `${(marketCap / 1000).toFixed(1)}k`;
+  } else {
+    return marketCap.toString();
   }
 }
 
@@ -61,12 +82,37 @@ function formatRecapMessage(data, timeframeHours) {
     message += `👑 *Top Wallets*\n`;
     
     const medals = ['🥇', '🥈', '🥉'];
+    
     topWallets.forEach((wallet, index) => {
       const medal = medals[index] || ' ';
+      
+      // Calculate success metrics
       const successRate = (wallet.successRate * 100).toFixed(0);
       const avgGain = wallet.avgGain.toFixed(0);
       
-      message += ` ${medal} ${wallet.walletName} (${successRate}% win rate, avg: ${avgGain}%)\n`;
+      // Additional metrics for high-value wallets
+      const bigWins = wallet.bigWinConfluences || 0; // 200%+ gains
+      const hugeWins = wallet.hugeWinConfluences || 0; // 500%+ gains
+      const isEarlyDetector = wallet.earlyDetections >= 2;
+      
+      // Make the display more informative based on wallet strengths
+      let walletInfo;
+      
+      if (hugeWins > 0) {
+        // Emphasize wallets with huge wins
+        walletInfo = `${successRate}% win rate, ${hugeWins}x +500%`;
+      } else if (bigWins > 0) {
+        // Emphasize wallets with big wins
+        walletInfo = `${successRate}% win rate, ${bigWins}x +200%`;
+      } else if (isEarlyDetector) {
+        // Emphasize early detection
+        walletInfo = `${successRate}% win rate, early detector`;
+      } else {
+        // Default display
+        walletInfo = `${successRate}% win rate, avg: ${avgGain}%`;
+      }
+      
+      message += ` ${medal} ${wallet.walletName} (${walletInfo})\n`;
     });
     
     message += '\n';
@@ -104,8 +150,8 @@ function formatRecapMessage(data, timeframeHours) {
   if (tokensWithPerformance.length > 0) {
     message += `*Performance:*\n`;
     
-    // Limit to 10 tokens to avoid messages that are too long
-    const displayLimit = 10;
+    // Limit to 15 tokens to avoid messages that are too long
+    const displayLimit = 15;
     const tokensToShow = tokensWithPerformance.slice(0, displayLimit);
     
     tokensToShow.forEach(token => {
@@ -113,7 +159,17 @@ function formatRecapMessage(data, timeframeHours) {
       const time = token.performance.minutesToATH === 0 ? 
         '0m' : token.performance.timeToATHFormatted || '?';
       
-      message += `   • ${token.tokenName} (${Math.round(gain)}% in ${time})\n`;
+      // Include initial market cap
+      const initialMcap = token.performance.initialMarketCap;
+      const formattedMcap = formatMarketCap(initialMcap);
+      
+      // Get appropriate emoji based on gain percentage
+      const emoji = getPerformanceEmoji(gain);
+      
+      // Format message with emoji, token name, gain%, time to ATH, and initial MCAP
+      // Use the sign for negative values, but not for positive (which already have a + sign implied)
+      const gainSign = gain < 0 ? '' : '+';
+      message += `   ${emoji} ${token.tokenName} (${gainSign}${Math.round(gain)}% in ${time}, MCAP: ${formattedMcap})\n`;
     });
     
     if (tokensWithPerformance.length > displayLimit) {
@@ -147,6 +203,7 @@ async function sendRecapMessage(bot, chatId, messageId, data, timeframeHours) {
 module.exports = {
   formatTimeframe,
   getPerformanceEmoji,
+  formatMarketCap,
   formatRecapMessage,
   sendRecapMessage
 };

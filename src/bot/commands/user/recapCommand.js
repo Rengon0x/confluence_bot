@@ -40,6 +40,8 @@ const recapCommand = {
       // Limit timeframe to reasonable values (min 1h, max 7d)
       timeframeHours = Math.max(1, Math.min(timeframeHours, 168));
       
+      logger.info(`Executing recap command for group ${chatId} with timeframe ${timeframeHours}h`);
+      
       // Inform the user that we're analyzing data
       const loadingMsg = await bot.sendMessage(
         chatId, 
@@ -52,9 +54,11 @@ const recapCommand = {
         timeframeHours
       );
       
-      if (!performanceData || performanceData.confluences.length === 0) {
+      logger.info(`Recap analysis complete for group ${chatId}: found ${performanceData.confluences?.length || 0} confluences`);
+      
+      if (!performanceData || !performanceData.confluences || performanceData.confluences.length === 0) {
         await bot.editMessageText(
-          `No confluences detected in the last ${formatTimeframe(timeframeHours)}.`,
+          `No confluences detected in the last ${formatTimeframe(timeframeHours)}. Perhaps try a longer timeframe like /recap 24h or /recap 3d.`,
           {
             chat_id: chatId,
             message_id: loadingMsg.message_id
@@ -72,12 +76,12 @@ const recapCommand = {
         timeframeHours
       );
       
-      logger.info(`Recap command executed for group ${chatId}, timeframe: ${timeframeHours}h, ${performanceData.confluences.length} confluences analyzed`);
+      logger.info(`Recap successfully delivered for group ${chatId}, timeframe: ${timeframeHours}h, ${performanceData.confluences.length} confluences analyzed`);
     } catch (error) {
-      logger.error(`Error in recap command: ${error.message}`);
+      logger.error(`Error in recap command: ${error.message}`, error);
       bot.sendMessage(
         msg.chat.id,
-        `❌ An error occurred while analyzing performance: ${error.message}`
+        `❌ An error occurred while analyzing performance: ${error.message}. Please try again later or contact support.`
       );
     }
   }

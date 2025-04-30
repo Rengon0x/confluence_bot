@@ -20,8 +20,12 @@ const recapService = {
       // Calculate cutoff time for the specified timeframe
       const cutoffTime = new Date(Date.now() - (timeframeHours * 60 * 60 * 1000));
       
+      logger.info(`Getting performance data for group ${groupId} since ${cutoffTime.toISOString()} (${timeframeHours}h timeframe)`);
+      
       // Get all confluences in the timeframe
       const confluences = await this.getConfluencesInTimeframe(groupId, cutoffTime);
+      
+      logger.info(`Found ${confluences.length} confluences in the timeframe for group ${groupId}`);
       
       if (confluences.length === 0) {
         return { confluences: [] };
@@ -58,14 +62,34 @@ const recapService = {
       const db = await getDatabase();
       const collection = db.collection(TransactionModel.collectionName);
       
-      // First get all tokens that had transactions in this period
+      logger.info(`Querying transactions since ${cutoffTime.toISOString()} for group ${groupId}`);
+      
+      // Check if we have any transactions for this group in this timeframe
+      const transactionCount = await collection.countDocuments({
+        groupId: groupId.toString(),
+        timestamp: { $gte: cutoffTime }
+      });
+      
+      logger.info(`Found ${transactionCount} total transactions in timeframe for group ${groupId}`);
+      
+      if (transactionCount === 0) {
+        return [];
+      }
+      
+      // Group transactions by token to find confluences
       const tokens = await collection.aggregate([
+        // Step 1: Match transactions in the specified timeframe for this group
         {
           $match: {
             groupId: groupId.toString(),
             timestamp: { $gte: cutoffTime }
           }
         },
+        // Step 2: Sort by timestamp to get proper order
+        {
+          $sort: { timestamp: 1 }
+        },
+        // Step 3: Group by token (using both address and name as some tokens may not have address)
         {
           $group: {
             _id: { 
@@ -76,60 +100,60 @@ const recapService = {
             transactions: { $push: "$$ROOT" },
             firstTimestamp: { $min: "$timestamp" },
             lastTimestamp: { $max: "$timestamp" },
-            marketCap: { $avg: "$marketCap" }
+            marketCap: { $avg: "$marketCap" },
+            minMarketCap: { $min: "$marketCap" },
+            maxMarketCap: { $max: "$marketCap" },
+            transactionCount: { $sum: 1 }
           }
         },
+        // Step 4: Filter to only tokens with multiple wallets (confluences)
         {
           $match: {
-            "wallets.0": { $exists: true },
             "wallets.1": { $exists: true }  // At least 2 different wallets
           }
         },
+        // Step 5: Sort by first timestamp
         {
-          $sort: { lastTimestamp: -1 }  // Most recent first
-        },
-        {
-          $limit: 50  // Reasonable limit to avoid processing too many
+          $sort: { firstTimestamp: 1 }
         }
       ]).toArray();
       
+      logger.info(`Found ${tokens.length} tokens with multiple wallets in timeframe for group ${groupId}`);
+      
       // Format for easier processing
       const confluences = tokens.map(token => {
-        // Identify the first 2 wallet transactions to determine detection time
-        let detectionTimestamp;
-        if (token.transactions.length >= 2) {
-          // Sort by timestamp
-          const sortedTx = [...token.transactions].sort((a, b) => 
-            new Date(a.timestamp) - new Date(b.timestamp)
-          );
+        // Find when the confluence was first detected (when the second wallet bought)
+        const sortedTx = [...token.transactions].sort((a, b) => 
+          new Date(a.timestamp) - new Date(b.timestamp)
+        );
+        
+        // Find the timestamp when the second unique wallet appeared
+        let detectionTimestamp = null;
+        const walletsSeen = new Set();
+        
+        for (const tx of sortedTx) {
+          walletsSeen.add(tx.walletName);
           
-          // Unique wallets in order of appearance
-          const uniqueWallets = [];
-          const walletsSeen = new Set();
-          
-          for (const tx of sortedTx) {
-            if (!walletsSeen.has(tx.walletName)) {
-              walletsSeen.add(tx.walletName);
-              uniqueWallets.push(tx);
-              
-              // When we have 2 unique wallets, we have a confluence
-              if (uniqueWallets.length === 2) {
-                detectionTimestamp = tx.timestamp;
-                break;
-              }
-            }
+          // When we have 2 unique wallets, we have a confluence
+          if (walletsSeen.size === 2) {
+            detectionTimestamp = tx.timestamp;
+            break;
           }
-        } else {
-          detectionTimestamp = token.firstTimestamp;
+        }
+        
+        // If we couldn't determine detection time, use the first transaction
+        if (!detectionTimestamp && sortedTx.length > 0) {
+          detectionTimestamp = sortedTx[0].timestamp;
         }
         
         return {
           tokenName: token._id.coin,
           tokenAddress: token._id.coinAddress,
-          detectionTimestamp: detectionTimestamp,
+          detectionTimestamp: detectionTimestamp || token.firstTimestamp,
           detectionMarketCap: token.marketCap,
           totalUniqueWallets: token.wallets.length,
-          wallets: token.wallets
+          wallets: token.wallets,
+          transactions: token.transactions
         };
       });
       
@@ -151,15 +175,17 @@ const recapService = {
       
       // Filter to only tokens with addresses
       const confluencesWithAddresses = confluences.filter(conf => 
-        conf.tokenAddress && conf.tokenAddress.trim().length > 0
+        conf.tokenAddress && conf.tokenAddress.trim().length > 0 &&
+        conf.tokenAddress.length >= 30 && 
+        !conf.tokenAddress.startsWith('SIM')
       );
       
       if (confluencesWithAddresses.length === 0) {
-        logger.warn('No confluences with token addresses found for performance analysis');
+        logger.warn('No confluences with valid token addresses found for performance analysis');
         return confluences;
       }
       
-      // Prepare tokens data for batch processing
+      // Prepare tokens data for performance analysis
       const tokensData = confluencesWithAddresses.map(conf => ({
         tokenAddress: conf.tokenAddress,
         tokenName: conf.tokenName,
@@ -167,7 +193,7 @@ const recapService = {
         initialMarketCap: conf.detectionMarketCap
       }));
       
-      // Use batch processing to find ATH (All-Time High)
+      // Get ATH data for each token
       const athResults = await birdeyeService.batchProcessATH(tokensData);
       
       // Map results back to confluences
@@ -183,9 +209,8 @@ const recapService = {
             percentageGain: result.athData.percentageGain,
             minutesToATH: result.athData.minutesToATH,
             timeToATHFormatted: result.athData.timeToATHFormatted,
+            initialMarketCap: result.initialMarketCap,
             athMarketCap: result.athData.athMarketCap,
-            
-            // For quick dumps
             drop50PctDetected: result.athData.drop50PctDetected,
             earlyDrops: result.athData.earlyDrops
           };
@@ -214,8 +239,34 @@ const recapService = {
         if (!conf.performance) continue;
         
         const gain = conf.performance.percentageGain;
+        
+        // Categories based on gain
         const isProfit = gain > 0;
-        const isProfitable = gain >= 100; // 100%+ is considered a hit
+        const isSmallWin = gain >= 50;
+        const isProfitable = gain >= 100;
+        const isVeryProfitable = gain >= 200;
+        const isExtremelyProfitable = gain >= 500;
+        
+        // Get first two wallets (they deserve more credit)
+        const sortedTxs = [...conf.transactions || []].sort((a, b) => 
+          new Date(a.timestamp) - new Date(b.timestamp)
+        );
+        
+        const walletsByFirstAppearance = [];
+        const walletsSeen = new Set();
+        
+        for (const tx of sortedTxs) {
+          if (!walletsSeen.has(tx.walletName)) {
+            walletsSeen.add(tx.walletName);
+            walletsByFirstAppearance.push(tx.walletName);
+            
+            if (walletsByFirstAppearance.length >= 2) {
+              break;
+            }
+          }
+        }
+        
+        const earlyWallets = walletsByFirstAppearance.slice(0, 2);
         
         // Update stats for each wallet involved
         for (const wallet of conf.wallets) {
@@ -223,8 +274,13 @@ const recapService = {
             walletStats[wallet] = {
               totalConfluences: 0,
               profitConfluences: 0,
-              hitConfluences: 0, // 100%+ gain
+              smallWinConfluences: 0,
+              hitConfluences: 0,
+              bigWinConfluences: 0,
+              hugeWinConfluences: 0,
+              earlyDetections: 0,
               totalGain: 0,
+              weightedGain: 0,
               avgGain: 0,
               successRate: 0
             };
@@ -233,28 +289,59 @@ const recapService = {
           // Update wallet stats
           walletStats[wallet].totalConfluences++;
           
+          // Add this confluence's gain to the wallet's total
+          walletStats[wallet].totalGain += gain;
+          
+          // Apply weight boost for early wallets
+          const isEarly = earlyWallets.includes(wallet);
+          if (isEarly) {
+            walletStats[wallet].earlyDetections++;
+            walletStats[wallet].weightedGain += gain * 1.5;
+          } else {
+            walletStats[wallet].weightedGain += gain;
+          }
+          
+          // Count by profit categories
           if (isProfit) {
             walletStats[wallet].profitConfluences++;
+          }
+          
+          if (isSmallWin) {
+            walletStats[wallet].smallWinConfluences++;
           }
           
           if (isProfitable) {
             walletStats[wallet].hitConfluences++;
           }
           
-          walletStats[wallet].totalGain += gain;
+          if (isVeryProfitable) {
+            walletStats[wallet].bigWinConfluences++;
+          }
+          
+          if (isExtremelyProfitable) {
+            walletStats[wallet].hugeWinConfluences++;
+          }
+          
+          // Calculate averages
           walletStats[wallet].avgGain = walletStats[wallet].totalGain / walletStats[wallet].totalConfluences;
           walletStats[wallet].successRate = walletStats[wallet].profitConfluences / walletStats[wallet].totalConfluences;
         }
       }
       
-      // Convert to array and sort by profitability
+      // Convert to array and sort by score
       return Object.entries(walletStats)
         .map(([wallet, stats]) => ({
           walletName: wallet,
           ...stats,
-          score: (stats.hitConfluences * 2) + stats.profitConfluences + (stats.avgGain / 100)
+          score: (stats.hugeWinConfluences * 5) +
+                 (stats.bigWinConfluences * 3) +
+                 (stats.hitConfluences * 2) +
+                 (stats.smallWinConfluences * 1) +
+                 (stats.earlyDetections * 2) +
+                 (stats.avgGain / 100)
         }))
-        .sort((a, b) => b.score - a.score);
+        .sort((a, b) => b.score - a.score)
+        .filter(wallet => wallet.totalConfluences >= 2);
     } catch (error) {
       logger.error(`Error calculating wallet performance: ${error.message}`);
       return [];

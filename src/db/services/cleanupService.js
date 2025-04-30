@@ -46,19 +46,23 @@ const cleanupService = {
       // Find orphaned combinations
       const orphanedCombinations = [];
       for (const combination of transactionCombinations) {
-        // Extract the tracker name from the wallet name (assuming it's the first part)
         const walletName = combination._id.walletName;
         const groupId = combination._id.groupId;
         
-        // Check if any valid tracker matches this wallet name pattern
+        // Check if the group ID still exists in active trackers
         let isValid = false;
+        
+        // Consider a transaction valid if its group ID matches an active tracker's group ID
         for (const tracker of activeTrackers) {
-          if (tracker.groupId === groupId && walletName.includes(tracker.name)) {
+          if (tracker.groupId === groupId && tracker.active !== false) {
             isValid = true;
             break;
           }
         }
         
+        // Only consider it orphaned if:
+        // 1. The group ID doesn't match any active tracker's group ID, OR
+        // 2. The transaction is older than the group's time window (checked elsewhere)
         if (!isValid) {
           orphanedCombinations.push({
             walletName: walletName,
@@ -166,14 +170,18 @@ const cleanupService = {
         const walletName = combination._id.walletName;
         const groupId = combination._id.groupId;
         
+        // Check if the group ID still exists in active trackers
         let isValid = false;
+        
+        // Consider a transaction valid if its group ID matches an active tracker's group ID
         for (const tracker of activeTrackers) {
-          if (tracker.groupId === groupId && walletName.includes(tracker.name)) {
+          if (tracker.groupId === groupId && tracker.active !== false) {
             isValid = true;
             break;
           }
         }
         
+        // Only consider it orphaned if the group ID doesn't match any active tracker's group ID
         if (!isValid) {
           orphanedCombinations.push({
             walletName: walletName,
