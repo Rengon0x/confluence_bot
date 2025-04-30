@@ -35,7 +35,6 @@ const helpCommand = {
         `/stop - Stop all monitoring in this group\n` +
         `/status - Check active monitoring status\n` +
         `/settings - Configure detection settings\n` +
-        `/recap - View performance of recent confluences\n` +
         `/help - Show this help message\n\n` +
         
         `*Supported Tracker Types:*\n` +

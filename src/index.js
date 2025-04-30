@@ -10,6 +10,7 @@ const cleanupService = require('./db/services/cleanupService');
 const queueManager = require('./services/queueService');
 const performanceMonitor = require('./utils/performanceMonitor');
 const shutdownManager = require('./utils/shutdownManager');
+const accessControlService = require('./services/accessControlService');
 
 /**
  * Main application entry point
@@ -23,6 +24,15 @@ async function startApp() {
     await db.connectToDatabase();
     logger.info('MongoDB connection established');
 
+    // Initialize both accessControlService (legacy) and betaUserService (from db module)
+    // But ensure we're debugging what's happening with both services
+    await accessControlService.initialize();
+    logger.info('Legacy access control service initialized');
+    
+    // Make sure betaUserService is also initialized properly
+    await db.betaUserService.initialize();
+    logger.info('Beta user service directly initialized');
+
     // Run database cleanup for orphaned transactions
     logger.info('Running database cleanup...');
     const cleanupResult = await cleanupService.runAllCleanupTasks();
@@ -32,8 +42,8 @@ async function startApp() {
     await confluenceService.initialize();
     logger.info('Confluence service initialized');
     
-    // Start the bot
-    const bot = startBot();
+    // Start the bot - now returns a promise
+    const bot = await startBot();
     logger.info('Bot started successfully');
     
     // Start the forwarder

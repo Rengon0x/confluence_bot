@@ -20,9 +20,12 @@ function registerCommands(bot) {
 
   // Add configured admins
   if (config.adminUsers && Array.isArray(config.adminUsers)) {
+    logger.info(`Adding ${config.adminUsers.length} admins from config: ${config.adminUsers.join(', ')}`);
     config.adminUsers.forEach(userId => {
       commandManager.addAdmin(userId);
     });
+  } else {
+    logger.warn('No admin users found in config');
   }
 
   // Register all commands on the bot

@@ -95,10 +95,10 @@ class CommandManager {
    * @returns {boolean} True if the user is an admin
    */
   isAdmin(userId) {
-    // For development, we can always return true
-    // In production, uncomment the line below
-    // return this.admins.has(userId.toString());
-    return true;
+    // Use the actual admin check
+    const result = this.admins.has(userId.toString());
+    logger.info(`Admin check for user ${userId}: ${result ? 'IS ADMIN' : 'NOT ADMIN'}`);
+    return result;
   }
 
   /**
@@ -142,6 +142,9 @@ class CommandManager {
             logger.debug(`Ignoring command ${command.name} directed at another bot`);
             return;
           }
+          
+          // We don't need to do any auth check here because the middleware will
+          // handle it for us at the 'emit' level, before command matching happens
           
           // Clear conversation states before executing a new command
           this.clearConversationStates(bot, msg);

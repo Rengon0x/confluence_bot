@@ -6,6 +6,7 @@ const trackerService = require('./services/trackerService');
 const groupService = require('./services/groupService');
 const setupService = require('./services/setupService');
 const transactionService = require('./services/transactionService');
+const betaUserService = require('./services/betaUserService');
 const validators = require('./utils/validators');
 
 // Export everything
@@ -21,6 +22,7 @@ module.exports = {
   groupService,
   setupService,
   transactionService,
+  betaUserService, // Add beta user service
   
   // Utils
   validators,
@@ -64,12 +66,29 @@ module.exports = {
     return trackerService.getAllActive();
   },
 
-    // Transaction Service helpers
-    async storeTransaction(transaction, groupId) {
+  // Transaction Service helpers
+  async storeTransaction(transaction, groupId) {
     return transactionService.storeTransaction(transaction, groupId);
-    },
+  },
 
-    async getRecentTransactions(groupId, type, coin, windowMinutes) {
+  async getRecentTransactions(groupId, type, coin, windowMinutes) {
     return transactionService.getRecentTransactions(groupId, type, coin, windowMinutes);
-    }
+  },
+  
+  // Beta User Service helpers
+  async addBetaUser(username, addedBy) {
+    return betaUserService.addBetaUser(username, addedBy);
+  },
+  
+  async removeBetaUser(username) {
+    return betaUserService.removeBetaUser(username);
+  },
+  
+  async isUserAuthorized(user) {
+    return betaUserService.isUserAuthorized(user);
+  },
+  
+  async getAllBetaUsers() {
+    return betaUserService.getAllBetaUsers();
+  }
 };

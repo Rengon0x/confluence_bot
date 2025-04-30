@@ -39,5 +39,19 @@ module.exports = {
   logging: {
     level: process.env.LOG_LEVEL || 'info'
   },
-  supportContact: process.env.SUPPORT_CONTACT || 'your_username'
+  supportContact: process.env.SUPPORT_CONTACT || 'your_username',
+
+  // Access control settings
+  accessControl: {
+    enabled: true,
+    maxUsers: parseInt(process.env.MAX_USERS || '100'),
+    contactUser: process.env.CONTACT_USER || 'rengon0x'
+  },
+  
+  // Admin users who can manage the bot and bypass access control
+  adminUsers: (() => {
+    // Hard-code your exact user ID directly - from logs, we see it's 1718036512
+    console.log('Setting up admin user ID');
+    return ['1718036512'];  // Rengon0x's actual user ID
+  })()
 };
