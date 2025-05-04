@@ -14,6 +14,7 @@ class Transaction {
    * @param {number} marketCap - Market cap of the token (optional)
    * @param {number} baseAmount - Amount of base token (SOL/ETH) used (optional)
    * @param {string} baseSymbol - Symbol of base token (SOL/ETH) (optional)
+   * @param {string} walletAddress - Address of the wallet (optional)
    */
   constructor(
     walletName,
@@ -31,14 +32,44 @@ class Transaction {
     this.walletName = walletName;
     this.type = type.toLowerCase();
     this.coin = coin.toUpperCase();
-    this.coinAddress = coinAddress || '';
+    
+    // Ensure coinAddress is stored properly - normalize and validate it
+    this.coinAddress = this.normalizeAddress(coinAddress);
+    
     this.amount = amount;
     this.usdValue = usdValue;
     this.timestamp = timestamp || new Date();
     this.marketCap = marketCap;
     this.baseAmount = baseAmount;
     this.baseSymbol = baseSymbol;
-    this.walletAddress = walletAddress || ''; 
+    
+    // Store wallet address properly as well
+    this.walletAddress = this.normalizeAddress(walletAddress);
+  }
+
+  /**
+   * Normalize and validate an address
+   * @param {string} address - Token or wallet address
+   * @returns {string} - Normalized address or empty string
+   */
+  normalizeAddress(address) {
+    // Check if address is valid
+    if (!address || typeof address !== 'string') {
+      return '';
+    }
+    
+    // Trim whitespace and check length
+    const trimmed = address.trim();
+    
+    // Not storing addresses that are too short or invalid placeholders
+    if (trimmed.length < 30 || 
+        trimmed === 'unknown' || 
+        trimmed === 'undefined' ||
+        trimmed === 'none') {
+      return '';
+    }
+    
+    return trimmed;
   }
 
   /**
@@ -51,6 +82,14 @@ class Transaction {
     const diffMs = now - this.timestamp;
     const diffMinutes = diffMs / 60000;
     return diffMinutes <= windowMinutes;
+  }
+  
+  /**
+   * Check if the transaction has a valid coin address
+   * @returns {boolean} - True if the transaction has a valid coin address
+   */
+  hasValidCoinAddress() {
+    return this.coinAddress && this.coinAddress.length >= 30;
   }
 }
 

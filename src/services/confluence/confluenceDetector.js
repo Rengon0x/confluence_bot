@@ -9,14 +9,14 @@ const groupSettingsManager = require('./groupSettingsManager');
 const startupTime = new Date();
 
 /**
- * Core confluence detection logic
+ * Core confluence detection logic - optimized for performance
  */
 const confluenceDetector = {
   // Store metadata for older transactions
   olderTransactionsMetadata: {},
 
   /**
-   * Process a token for confluence detection
+   * Process a token for confluence detection - optimized version
    * @param {string} tokenId - Token ID (address or name)
    * @param {Object} tokenInfo - Token information
    * @param {Array} confluences - Array to add detected confluences to
@@ -34,43 +34,64 @@ const confluenceDetector = {
         olderSellData
       } = tokenInfo;
       
-      // Create a wallet count tracker
-      const walletTracker = new Map();
+      // Create a wallet Set for faster lookup performance
+      const walletSet = new Set();
       
-      // Count cached transactions wallets
-      const allTransactions = [...buyTransactions, ...sellTransactions];
-      allTransactions.forEach(tx => {
-        const walletId = tx.walletAddress || tx.walletName;
-        walletTracker.set(walletId, true);
-      });
+      // Get minimum wallets threshold early to allow for early exit
+      const minWallets = await groupSettingsManager.getMinWalletsForGroup(groupId);
       
-      // Count older buy transactions wallets
-      if (olderBuyData && olderBuyData.wallets) {
-        olderBuyData.wallets.forEach(wallet => {
-          walletTracker.set(wallet, true);
-        });
+      // Track wallet addresses only once with a Set for better performance
+      // Use a single pass through transactions rather than multiple loops
+      for (const tx of buyTransactions) {
+        walletSet.add(tx.walletAddress || tx.walletName);
+        // Early exit check to reduce unnecessary processing
+        if (walletSet.size >= minWallets) break;
       }
       
-      // Count older sell transactions wallets
-      if (olderSellData && olderSellData.wallets) {
-        olderSellData.wallets.forEach(wallet => {
-          walletTracker.set(wallet, true);
-        });
+      // Continue adding sell transactions only if we haven't hit threshold
+      if (walletSet.size < minWallets) {
+        for (const tx of sellTransactions) {
+          walletSet.add(tx.walletAddress || tx.walletName);
+          if (walletSet.size >= minWallets) break;
+        }
+      }
+      
+      // Add older wallets to the set, if available
+      if (walletSet.size < minWallets) {
+        if (olderBuyData && olderBuyData.wallets) {
+          for (const wallet of olderBuyData.wallets) {
+            walletSet.add(wallet);
+            if (walletSet.size >= minWallets) break;
+          }
+        }
+        
+        if (walletSet.size < minWallets && olderSellData && olderSellData.wallets) {
+          for (const wallet of olderSellData.wallets) {
+            walletSet.add(wallet);
+            if (walletSet.size >= minWallets) break;
+          }
+        }
       }
       
       // Initial total count (including both cached and older transactions)
-      const totalWalletCount = walletTracker.size;
+      const totalWalletCount = walletSet.size;
       
-      // Check if we need to fetch additional data from MongoDB
-      const minWallets = await groupSettingsManager.getMinWalletsForGroup(groupId);
+      // Early exit if not enough wallets - prevents unnecessary processing
+      if (totalWalletCount < minWallets) {
+        return;
+      }
+      
+      // Pre-fetch additional data only if needed
       let additionalTransactions = [];
-      
-      // Get the specific window for this group
       const windowMinutes = await groupSettingsManager.getWindowMinutesForGroup(groupId);
       
-      // If we have few cached transactions but lots of older ones, we might need to load more data
-      if (allTransactions.length === 0 || (totalWalletCount >= minWallets && allTransactions.length < 10)) {
-        // Fetch from MongoDB to fill in details not in cache
+      // Combine all current transactions for set operations
+      const allTransactions = [...buyTransactions, ...sellTransactions];
+      
+      // Only fetch additional data if we've just crossed the threshold for detection
+      // or if we have few in-memory transactions
+      if (totalWalletCount === minWallets || allTransactions.length < 10) {
+        // Optimize database query - only fetch if really needed
         try {
           if (coinAddress) {
             // Try loading by address first
@@ -88,52 +109,63 @@ const confluenceDetector = {
         }
       }
       
-      // Combine cached transactions with any additionally loaded ones
-      const combinedTransactions = [...allTransactions];
+      // Combine cached transactions with any additionally loaded ones - avoid duplicates
+      // Use a Set-based approach to eliminate duplicates more efficiently
+      const txMap = new Map();
       
-      // Add additional transactions that aren't already in cache
+      // Add all transactions we already have to the map
+      for (const tx of allTransactions) {
+        // Use a unique key for each transaction
+        const txKey = `${tx.walletName}-${tx.timestamp}-${tx.amount}`;
+        txMap.set(txKey, tx);
+      }
+      
+      // Add additional transactions that aren't already in the map
       for (const tx of additionalTransactions) {
-        const isDuplicate = combinedTransactions.some(
-          existingTx => 
-            existingTx.walletName === tx.walletName && 
-            existingTx.timestamp === tx.timestamp &&
-            existingTx.amount === tx.amount
-        );
-        
-        if (!isDuplicate) {
-          combinedTransactions.push(tx);
+        const txKey = `${tx.walletName}-${tx.timestamp}-${tx.amount}`;
+        if (!txMap.has(txKey)) {
+          txMap.set(txKey, tx);
         }
       }
       
+      // Get the combined transactions array
+      const combinedTransactions = Array.from(txMap.values());
+      
+      // Add metadata transactions only if we have no real transactions but have metadata
       if (combinedTransactions.length === 0) {
-        // If we still have no transactions but have metadata, create placeholder transactions
         if (olderBuyData || olderSellData) {
-          
           if (olderBuyData) {
+            // Calculate average values once - avoid repeated div operations
+            const avgAmount = olderBuyData.totalAmount / olderBuyData.wallets.length;
+            const avgBaseAmount = olderBuyData.totalBaseAmount / olderBuyData.wallets.length;
+            
             olderBuyData.wallets.forEach(wallet => {
               combinedTransactions.push({
                 walletName: wallet,
                 coin: olderBuyData.coin,
                 coinAddress: olderBuyData.coinAddress,
-                amount: olderBuyData.totalAmount / olderBuyData.wallets.length, // average amount
+                amount: avgAmount,
                 type: 'buy',
                 timestamp: olderBuyData.newestTimestamp,
-                baseAmount: olderBuyData.totalBaseAmount / olderBuyData.wallets.length, // average base amount
+                baseAmount: avgBaseAmount,
                 isMetadataTransaction: true
               });
             });
           }
           
           if (olderSellData) {
+            const avgAmount = olderSellData.totalAmount / olderSellData.wallets.length;
+            const avgBaseAmount = olderSellData.totalBaseAmount / olderSellData.wallets.length;
+            
             olderSellData.wallets.forEach(wallet => {
               combinedTransactions.push({
                 walletName: wallet,
                 coin: olderSellData.coin,
                 coinAddress: olderSellData.coinAddress,
-                amount: olderSellData.totalAmount / olderSellData.wallets.length, // average amount
+                amount: avgAmount,
                 type: 'sell',
                 timestamp: olderSellData.newestTimestamp,
-                baseAmount: olderSellData.totalBaseAmount / olderSellData.wallets.length, // average base amount
+                baseAmount: avgBaseAmount,
                 isMetadataTransaction: true
               });
             });
@@ -149,15 +181,24 @@ const confluenceDetector = {
         ? `${groupId}_addr_${coinAddress}` // Remove transaction type from key
         : `${groupId}_name_${coin}`;
         
-      // Get existing confluence for this token
+      // Get existing confluence for this token - reuse if already detected
       const existingConfluence = await cacheManager.detectedConfluences.get(confluenceKey) || { wallets: [] };
       
       // Process all transactions and create a wallet map
+      // Use Map for better performance on large datasets
       const walletMap = new Map();
       
       // First, process existing wallets to maintain their order
+      // Precompute all existing wallet IDs for faster lookups
+      const existingWalletIds = new Set(
+        existingConfluence.wallets.map(w => w.walletAddress || w.walletName)
+      );
+      
       existingConfluence.wallets.forEach(wallet => {
-        walletMap.set(wallet.walletName, {
+        // Use address as ID when available, fallback to name
+        const walletId = wallet.walletAddress || wallet.walletName;
+        
+        walletMap.set(walletId, {
           ...wallet,
           amount: 0,
           usdValue: 0,
@@ -173,12 +214,12 @@ const confluenceDetector = {
         });
       });
       
-      // Sort all transactions by timestamp
-      const sortedTransactions = [...combinedTransactions].sort((a, b) => 
+      // Sort all transactions by timestamp - do this once
+      const sortedTransactions = combinedTransactions.sort((a, b) => 
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
       
-      // Process all transactions
+      // Process all transactions in a single pass
       for (const tx of sortedTransactions) {
         // Skip transactions without a valid type
         if (!tx.type) {
@@ -206,7 +247,7 @@ const confluenceDetector = {
             buyBaseAmount: tx.type === 'buy' ? (tx.baseAmount || 0) : 0,
             sellBaseAmount: tx.type === 'sell' ? (tx.baseAmount || 0) : 0,
             transactions: [tx],
-            isUpdated: existingConfluence.wallets.length > 0, // Mark as updated if it's a new wallet in an existing confluence
+            isUpdated: existingWalletIds.has(walletId), // Mark as updated if it exists in previous confluence
             isFromMetadata: !!tx.isMetadataTransaction
           });
         } else {
@@ -239,7 +280,7 @@ const confluenceDetector = {
           wallet.usdValue += tx.usdValue || 0;
           wallet.baseAmount += tx.baseAmount || 0;
           
-          // Update market cap calculation
+          // Update market cap calculation with weighted average
           if (tx.marketCap > 0 && tx.baseAmount > 0) {
             const oldWeight = wallet.baseAmount - tx.baseAmount;
             const newWeight = tx.baseAmount;
@@ -254,11 +295,13 @@ const confluenceDetector = {
             }
           }
           
+          // Check for updates more efficiently
           // Mark as updated if new transaction is of a different type or adds significant value
-          const previousWallet = existingConfluence.wallets.find(w => w.walletName === wallet.walletName);
-          if (previousWallet) {
-            if (previousType !== wallet.type || 
-                Math.abs(previousWallet.baseAmount - wallet.baseAmount) > 0.01) {
+          if (existingWalletIds.has(walletId)) {
+            const previousWallet = existingConfluence.wallets.find(w => (w.walletAddress || w.walletName) === walletId);
+            if (previousWallet && 
+                (previousType !== wallet.type || 
+                 Math.abs(previousWallet.baseAmount - wallet.baseAmount) > 0.01)) {
               wallet.isUpdated = true;
             }
           }
@@ -282,20 +325,25 @@ const confluenceDetector = {
         }
       });
       
-      // Then add new wallets in order of their first transaction
-      const newWalletIds = [...walletMap.keys()].filter(
-        id => !existingConfluence.wallets.some(w => (w.walletAddress || w.walletName) === id)
-      );
+      // Then add new wallets - only need to worry about wallets not already processed
+      const newWallets = [];
+      walletMap.forEach((wallet, id) => {
+        if (!existingWalletIds.has(id) && wallet.transactions.length > 0) {
+          newWallets.push(wallet);
+        }
+      });
       
-      const newWallets = newWalletIds.map(id => walletMap.get(id))
-        .filter(wallet => wallet.transactions.length > 0)
-        .sort((a, b) => {
+      // Only sort if needed - avoid expensive operations
+      if (newWallets.length > 1) {
+        // Sort by first transaction timestamp
+        newWallets.sort((a, b) => {
           const aFirstTx = a.transactions.reduce((earliest, tx) => 
             new Date(tx.timestamp) < new Date(earliest.timestamp) ? tx : earliest, a.transactions[0]);
           const bFirstTx = b.transactions.reduce((earliest, tx) => 
             new Date(tx.timestamp) < new Date(earliest.timestamp) ? tx : earliest, b.transactions[0]);
           return new Date(aFirstTx.timestamp).getTime() - new Date(bFirstTx.timestamp).getTime();
         });
+      }
       
       wallets = [...wallets, ...newWallets];
       
@@ -305,14 +353,43 @@ const confluenceDetector = {
       if (totalUniqueWallets >= minWallets) {
         const isUpdate = existingConfluence.wallets.length > 0;
         
-        // Count real transactions (not from metadata)
-        const nonMetadataWallets = wallets.filter(w => !w.isFromMetadata);
+        // Count real transactions (not from metadata) - avoid unnecessary filtering by using a counter
+        let nonMetadataCount = 0;
+        for (const wallet of wallets) {
+          if (!wallet.isFromMetadata) {
+            nonMetadataCount++;
+          }
+        }
         
         // Determine the primary transaction type based on most recent activity
-        // or the type with the most transactions
-        const buyWallets = wallets.filter(w => w.buyBaseAmount > 0).length;
-        const sellWallets = wallets.filter(w => w.sellBaseAmount > 0).length;
+        // Count once instead of filtering twice
+        let buyWallets = 0;
+        let sellWallets = 0;
+        
+        for (const wallet of wallets) {
+          if (wallet.buyBaseAmount > 0) buyWallets++;
+          if (wallet.sellBaseAmount > 0) sellWallets++;
+        }
+        
         const primaryType = buyWallets >= sellWallets ? 'buy' : 'sell';
+        
+        // Pre-calculate summary stats in a single pass
+        let totalAmount = 0;
+        let totalUsdValue = 0;
+        let totalBaseAmount = 0;
+        let totalMarketCap = 0;
+        let updatedWalletCount = 0;
+        
+        for (const wallet of wallets) {
+          totalAmount += wallet.amount;
+          totalUsdValue += (wallet.usdValue || 0);
+          totalBaseAmount += (wallet.baseAmount || 0);
+          totalMarketCap += (wallet.marketCap || 0);
+          
+          if (wallet.isUpdated) {
+            updatedWalletCount++;
+          }
+        }
         
         // Create the confluence object
         const confluence = {
@@ -321,18 +398,18 @@ const confluenceDetector = {
           coinAddress,
           wallets,
           count: totalUniqueWallets,
-          nonMetadataCount: nonMetadataWallets.length,
-          totalAmount: wallets.reduce((sum, w) => sum + w.amount, 0),
-          totalUsdValue: wallets.reduce((sum, w) => sum + (w.usdValue || 0), 0),
-          totalBaseAmount: wallets.reduce((sum, w) => sum + (w.baseAmount || 0), 0),
-          avgMarketCap: wallets.reduce((sum, w) => sum + (w.marketCap || 0), 0) / wallets.length,
+          nonMetadataCount,
+          totalAmount,
+          totalUsdValue,
+          totalBaseAmount,
+          avgMarketCap: totalMarketCap / wallets.length,
           timestamp: new Date(),
           groupId,
           isUpdate,
           buyCount: buyWallets,
           sellCount: sellWallets,
           // Add 48h window flag
-          is48hWindow: nonMetadataWallets.length < minWallets && totalUniqueWallets >= minWallets
+          is48hWindow: nonMetadataCount < minWallets && totalUniqueWallets >= minWallets
         };
         
         // Save this confluence for future reference
@@ -341,7 +418,7 @@ const confluenceDetector = {
         // Only send updates if something has changed
         if (isUpdate) {
           // Only add to results if at least one wallet was updated
-          if (wallets.some(w => w.isUpdated)) {
+          if (updatedWalletCount > 0) {
             confluences.push(confluence);
           }
         } else {
@@ -355,7 +432,7 @@ const confluenceDetector = {
   },
 
   /**
-   * Check for confluences
+   * Check for confluences - optimized for performance
    * @param {string} groupId - Group ID
    * @returns {Promise<Array>} - List of detected confluences
    */
@@ -366,25 +443,32 @@ const confluenceDetector = {
     try {
       const confluences = [];
       const detectedTokens = new Map(); // Map to track tokens by their address or name
+      
+      // Get cache keys once
       const keys = await cacheManager.transactionsCache.keys();
       
-      // Filter keys for this group
-      const groupKeys = keys.filter(key => key.startsWith(`${groupId}_`));
+      // Filter keys for this group - more efficient string checking
+      const groupPrefix = `${groupId}_`;
+      const groupKeys = keys.filter(key => key.startsWith(groupPrefix));
       
       // Debug log for monitoring
       if (groupKeys.length > 100) {
         logger.warn(`Large number of cache keys for group ${groupId}: ${groupKeys.length} keys`);
       }
       
-      // Optimization: retrieve all transactions at once
+      // Get all transactions at once for better performance
       const keyTransactionMap = {};
       const getPromises = [];
       
       // Start measuring cache retrieval performance
       const cacheTimer = performanceMonitor.startTimer();
       
-      for (const key of groupKeys) {
-        getPromises.push(
+      // Batch cache retrieval for better performance
+      // Process in chunks to avoid memory pressure
+      const BATCH_SIZE = 25; // Process 25 keys at a time
+      for (let i = 0; i < groupKeys.length; i += BATCH_SIZE) {
+        const batchKeys = groupKeys.slice(i, i + BATCH_SIZE);
+        const batchPromises = batchKeys.map(key => 
           cacheManager.transactionsCache.get(key)
             .then(transactions => {
               if (transactions) {
@@ -392,15 +476,18 @@ const confluenceDetector = {
               }
             })
         );
+        
+        // Wait for each batch to complete
+        await Promise.all(batchPromises);
       }
-      
-      // Wait for all transactions to be retrieved
-      await Promise.all(getPromises);
       
       // End measuring cache performance
       performanceMonitor.endTimer(cacheTimer, 'transactionProcessing', `cache_retrieval_${groupId}`);
       
       // First pass: identify all tokens and their information from cache
+      // Use a Map for token info to optimize lookup performance
+      const tokenInfoMap = new Map();
+      
       for (const key of groupKeys) {
         // Extract info from key
         const parts = key.split('_');
@@ -417,10 +504,8 @@ const confluenceDetector = {
         
         const transactions = keyTransactionMap[key] || [];
         
-        // Skip if no recent transactions
-        const hasNewTransactions = transactions.some(tx => 
-          new Date(tx.timestamp) > startupTime
-        );
+        // Skip if no transactions
+        if (transactions.length === 0) continue;
         
         // Get coin name from transactions if missing
         if (!coin && coinAddress && transactions.length > 0) {
@@ -431,8 +516,8 @@ const confluenceDetector = {
         const tokenId = coinAddress && coinAddress.length > 0 ? coinAddress : coin;
         
         // Store token info
-        if (!detectedTokens.has(tokenId)) {
-          detectedTokens.set(tokenId, {
+        if (!tokenInfoMap.has(tokenId)) {
+          tokenInfoMap.set(tokenId, {
             coin: coin,
             coinAddress: coinAddress,
             buyTransactions: [],
@@ -445,7 +530,7 @@ const confluenceDetector = {
         }
         
         // Add transactions to the appropriate array
-        const tokenInfo = detectedTokens.get(tokenId);
+        const tokenInfo = tokenInfoMap.get(tokenId);
         if (type === 'buy') {
           tokenInfo.buyTransactions.push(...transactions);
         } else if (type === 'sell') {
@@ -455,9 +540,10 @@ const confluenceDetector = {
       
       // Add older transactions metadata to the detected tokens
       if (this.olderTransactionsMetadata) {
-        for (const [key, metadata] of Object.entries(this.olderTransactionsMetadata)) {
+        // Only process relevant keys for this group
+        Object.entries(this.olderTransactionsMetadata).forEach(([key, metadata]) => {
           // Only process keys for this group
-          if (!key.startsWith(`${groupId}_`)) continue;
+          if (!key.startsWith(groupPrefix)) return;
           
           // Extract info from key
           const parts = key.split('_');
@@ -473,11 +559,11 @@ const confluenceDetector = {
             tokenId = metadata.coin; // Use the name
           }
           
-          if (!tokenId) continue;
+          if (!tokenId) return;
           
           // Get or create token info
-          if (!detectedTokens.has(tokenId)) {
-            detectedTokens.set(tokenId, {
+          if (!tokenInfoMap.has(tokenId)) {
+            tokenInfoMap.set(tokenId, {
               coin: metadata.coin,
               coinAddress: metadata.coinAddress,
               buyTransactions: [],
@@ -488,7 +574,7 @@ const confluenceDetector = {
             });
           }
           
-          const tokenInfo = detectedTokens.get(tokenId);
+          const tokenInfo = tokenInfoMap.get(tokenId);
           
           // Add older transaction metadata
           if (type === 'buy') {
@@ -496,20 +582,30 @@ const confluenceDetector = {
           } else if (type === 'sell') {
             tokenInfo.olderSellData = metadata;
           }
-        }
+        });
       }
       
-      // Second pass: process each token
-      const confluencePromises = [];
+      // Process tokens in parallel for better performance
+      const processPromises = [];
       
-      for (const [tokenId, tokenInfo] of detectedTokens.entries()) {
-        confluencePromises.push(
+      // Process in batches to control concurrency
+      const CONCURRENCY_LIMIT = 5;
+      const tokenEntries = Array.from(tokenInfoMap.entries());
+      
+      // Process tokens in batches to avoid memory issues
+      for (let i = 0; i < tokenEntries.length; i += CONCURRENCY_LIMIT) {
+        const batch = tokenEntries.slice(i, i + CONCURRENCY_LIMIT);
+        const batchPromises = batch.map(([tokenId, tokenInfo]) => 
           this.processTokenConfluence(tokenId, tokenInfo, confluences)
         );
+        
+        await Promise.all(batchPromises);
+        
+        // Add a small delay between batches to prevent event loop starvation
+        if (i + CONCURRENCY_LIMIT < tokenEntries.length) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
       }
-      
-      // Wait for all tokens to be processed
-      await Promise.all(confluencePromises);
       
       // End timing the entire confluence detection process
       const totalTime = performanceMonitor.endTimer(perfTimer, 'confluenceDetection', `check_group_${groupId}`);

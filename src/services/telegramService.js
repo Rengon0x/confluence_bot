@@ -16,15 +16,27 @@ const telegramMessageService = {
       const primaryEmoji = confluence.type === 'buy' ? '🟢' : '🔴';
       const isUpdate = confluence.isUpdate ? 'UPDATED' : 'DETECTED';
       
-      // Format token identifier - use token name if available, otherwise use address
+      // Format token identifier - STRONGLY prioritize address over name
       let tokenIdentifier;
-      if (confluence.coin && confluence.coin.trim().length > 0 && 
+      
+      // Always use the coin address when available
+      if (confluence.coinAddress && confluence.coinAddress.trim().length > 0) {
+        // Use token symbol with address in code format for easy copying
+        if (confluence.coin && confluence.coin.trim().length > 0 && 
+            confluence.coin.toUpperCase() !== 'UNKNOWN') {
+          tokenIdentifier = `$${confluence.coin} (<code>${confluence.coinAddress}</code>)`;
+        } else {
+          // Just use address if no valid name
+          tokenIdentifier = `<code>${confluence.coinAddress}</code>`;
+        }
+      } 
+      // Fall back to name only when no address is available
+      else if (confluence.coin && confluence.coin.trim().length > 0 && 
           confluence.coin.toUpperCase() !== 'UNKNOWN') {
         tokenIdentifier = `$${confluence.coin}`;
-      } else if (confluence.coinAddress && confluence.coinAddress.trim().length > 0) {
-        // Use token address with code formatting to make it copiable
-        tokenIdentifier = `<code>${confluence.coinAddress}</code>`;
-      } else {
+      } 
+      // Last resort
+      else {
         tokenIdentifier = '$UNKNOWN';
       }
       
@@ -34,60 +46,59 @@ const telegramMessageService = {
       const displayWallets = [];
       const processedWallets = new Set();
       
-       // Process each wallet to determine how it should be displayed
-    confluence.wallets.forEach(wallet => {
-      // Identifiant unique pour ce portefeuille (adresse ou nom si pas d'adresse)
-      const walletId = wallet.walletAddress || wallet.walletName;
-      
-      // Si ce portefeuille a déjà été traité, passez au suivant
-      if (processedWallets.has(walletId)) {
-        return;
-      }
-      processedWallets.add(walletId);
-      
-      // Rassembler toutes les transactions de ce portefeuille
-      // en parcourant tous les wallets pour trouver celles du même portefeuille
-      const allTransactions = [];
-      confluence.wallets.forEach(w => {
-        const wId = w.walletAddress || w.walletName;
-        if (wId === walletId && w.transactions) {
-          allTransactions.push(...w.transactions);
+      // Process each wallet to determine how it should be displayed
+      confluence.wallets.forEach(wallet => {
+        // Unique identifier for this wallet (address or name)
+        const walletId = wallet.walletAddress || wallet.walletName;
+        
+        // If this wallet has already been processed, skip to the next
+        if (processedWallets.has(walletId)) {
+          return;
+        }
+        processedWallets.add(walletId);
+        
+        // Gather all transactions for this wallet
+        // by iterating through all wallets to find those from the same wallet
+        const allTransactions = [];
+        confluence.wallets.forEach(w => {
+          const wId = w.walletAddress || w.walletName;
+          if (wId === walletId && w.transactions) {
+            allTransactions.push(...w.transactions);
+          }
+        });
+        
+        // Separate buy and sell transactions
+        const buyTransactions = allTransactions.filter(tx => tx.type === 'buy');
+        const sellTransactions = allTransactions.filter(tx => tx.type === 'sell');
+        
+        if (buyTransactions.length > 0) {
+          // Create a buy display for this wallet
+          const buyDisplay = {
+            walletName: wallet.walletName,
+            baseAmount: buyTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
+            baseSymbol: buyTransactions[0].baseSymbol || 'SOL',
+            marketCap: calculateWeightedAverage(buyTransactions, 'marketCap', 'baseAmount'),
+            type: 'buy',
+            isUpdated: wallet.isUpdated && wallet.type === 'buy' && 
+                     isRecentlyUpdated(wallet, buyTransactions)
+          };
+          displayWallets.push(buyDisplay);
+        }
+        
+        if (sellTransactions.length > 0) {
+          // Also create a sell display for this wallet if it has sell transactions
+          const sellDisplay = {
+            walletName: wallet.walletName,
+            baseAmount: sellTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
+            baseSymbol: sellTransactions[0].baseSymbol || 'SOL', 
+            marketCap: calculateWeightedAverage(sellTransactions, 'marketCap', 'baseAmount'),
+            type: 'sell',
+            isUpdated: wallet.isUpdated && wallet.type === 'sell' &&
+                     isRecentlyUpdated(wallet, sellTransactions)
+          };
+          displayWallets.push(sellDisplay);
         }
       });
-      
-      // Séparer les transactions d'achat et de vente
-      const buyTransactions = allTransactions.filter(tx => tx.type === 'buy');
-      const sellTransactions = allTransactions.filter(tx => tx.type === 'sell');
-      
-      // Le reste du code reste identique...
-      if (buyTransactions.length > 0) {
-        // Create a buy display for this wallet
-        const buyDisplay = {
-          walletName: wallet.walletName,
-          baseAmount: buyTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
-          baseSymbol: buyTransactions[0].baseSymbol || 'SOL',
-          marketCap: calculateWeightedAverage(buyTransactions, 'marketCap', 'baseAmount'),
-          type: 'buy',
-          isUpdated: wallet.isUpdated && wallet.type === 'buy' && 
-                     isRecentlyUpdated(wallet, buyTransactions)
-        };
-        displayWallets.push(buyDisplay);
-      }
-      
-      if (sellTransactions.length > 0) {
-        // Also create a sell display for this wallet if it has sell transactions
-        const sellDisplay = {
-          walletName: wallet.walletName,
-          baseAmount: sellTransactions.reduce((sum, tx) => sum + (tx.baseAmount || 0), 0),
-          baseSymbol: sellTransactions[0].baseSymbol || 'SOL', 
-          marketCap: calculateWeightedAverage(sellTransactions, 'marketCap', 'baseAmount'),
-          type: 'sell',
-          isUpdated: wallet.isUpdated && wallet.type === 'sell' &&
-                     isRecentlyUpdated(wallet, sellTransactions)
-        };
-        displayWallets.push(sellDisplay);
-      }
-    });
       
       // We want to preserve both buy and sell displays for the same wallet
       // So we'll deduplicate by wallet + type instead of just wallet
@@ -168,7 +179,16 @@ const telegramMessageService = {
       return message;
     } catch (error) {
       logger.error('Error formatting confluence message:', error);
-      return `Confluence detected for ${confluence.coin || confluence.coinAddress || 'UNKNOWN'}: ${confluence.wallets.length} wallets`;
+      
+      // Fallback message that still prioritizes address
+      let tokenDisplay = 'UNKNOWN';
+      if (confluence.coinAddress) {
+        tokenDisplay = confluence.coinAddress;
+      } else if (confluence.coin) {
+        tokenDisplay = confluence.coin;
+      }
+      
+      return `Confluence detected for ${tokenDisplay}: ${confluence.wallets?.length || 0} wallets`;
     }
   }
 };

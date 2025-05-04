@@ -1,14 +1,14 @@
 // src/services/confluence/index.js
 const cacheManager = require('./cacheManager');
 const transactionProcessor = require('./transactionProcessor');
-const confluenceDetector = require('./confluenceDetector');
 const groupSettingsManager = require('./groupSettingsManager');
-const transactionService = require('../../db/services/transactionService');
+const integratedConfluenceDetector = require('./integratedConfluenceDetector');
 const logger = require('../../utils/logger');
+const confluenceDbService = require('../../db/services/confluenceDbService');
 
 /**
- * Main confluence service module
- * Provides access to the various sub-components
+ * Main confluence service module - optimized version
+ * This version uses integrated detection with database persistence
  */
 const confluenceService = {
   // Re-export the caches for backward compatibility
@@ -24,89 +24,16 @@ const confluenceService = {
       // Initialize cache services
       await cacheManager.initialize();
       
-      // Get group settings (using default values initially)
-      await groupSettingsManager.getAllGroupSettings('default');
+      // Initialize the integrated detector
+      await integratedConfluenceDetector.initialize();
       
-      // Load 48h of transactions from MongoDB (using the maximum possible window)
-      const transactions = await transactionService.loadRecentTransactions(2880); // 48 hours
-      
-      // Optimize memory usage - only keep the most recent 12h in cache
-      // for frequent operations, but still use all 48h for confluence detection
-      const cacheWindowHours = 12;
-      const cacheWindowMs = cacheWindowHours * 60 * 60 * 1000;
-      const recentTimestamp = new Date(Date.now() - cacheWindowMs);
-      
-      // Split transactions between recent (for cache) and older (for analysis only)
-      const recentTransactions = [];
-      const olderTransactions = [];
-      
-      for (const tx of transactions) {
-        if (new Date(tx.timestamp) >= recentTimestamp) {
-          recentTransactions.push(tx);
-        } else {
-          olderTransactions.push(tx);
-        }
-      }
-      
-      logger.info(`Loaded ${transactions.length} transactions (${recentTransactions.length} recent for cache, ${olderTransactions.length} older for analysis)`);
-      
-      // Group recent transactions for cache storage
-      const grouped = {};
-      
-      for (const tx of recentTransactions) {
-        // Make sure type is valid
-        if (!tx.type) {
-          tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
-          logger.debug(`Setting default type ${tx.type} for transaction from wallet ${tx.walletName}`);
-        }
-        
-        // Determine the appropriate cache key - prioritize address over name
-        let key;
-        if (tx.coinAddress && tx.coinAddress.length > 0) {
-          key = `${tx.groupId}_${tx.type}_addr_${tx.coinAddress}`;
-        } else {
-          key = `${tx.groupId}_${tx.type}_name_${tx.coin}`;
-        }
-        
-        if (!grouped[key]) {
-          grouped[key] = [];
-        }
-        
-        // Include all important fields
-        grouped[key].push({
-          walletName: tx.walletName,
-          walletAddress: tx.walletAddress, // Include wallet address
-          coin: tx.coin,
-          coinAddress: tx.coinAddress,
-          amount: tx.amount,
-          usdValue: tx.usdValue,
-          timestamp: tx.timestamp,
-          marketCap: tx.marketCap || 0,
-          type: tx.type,                // Preserve transaction type
-          baseAmount: tx.baseAmount || 0,  // Preserve base amount
-          baseSymbol: tx.baseSymbol || ''  // Preserve base symbol
-        });
-      }
-      
-      // Populate cache with grouped transactions using batch operations
-      const batchPromises = [];
-      for (const [key, txList] of Object.entries(grouped)) {
-        batchPromises.push(cacheManager.transactionsCache.set(key, txList));
-      }
-      
-      // Wait for all cache operations to complete
-      await Promise.all(batchPromises);
-      
-      // Store metadata about older transactions to support 48h confluence detection
-      confluenceDetector.olderTransactionsMetadata = transactionProcessor.groupOlderTransactions(olderTransactions);
-      
-      logger.info(`Confluence service initialized with ${Object.keys(grouped).length} transaction groups in cache and ${Object.keys(confluenceDetector.olderTransactionsMetadata).length} older transaction groups metadata`);
+      logger.info('Optimized confluence service initialized');
+      return true;
     } catch (error) {
       logger.error(`Error initializing confluence service: ${error.message}`);
+      return false;
     }
   },
-  
-  // Re-export the main methods with the same interface
   
   /**
    * Add a transaction with duplicate checking
@@ -115,16 +42,35 @@ const confluenceService = {
    * @returns {Promise<boolean>} Success status
    */
   async addTransaction(transaction, groupId) {
-    return transactionProcessor.addTransaction(transaction, groupId);
+    const result = await transactionProcessor.addTransaction(transaction, groupId);
+    
+    // If transaction was added successfully, check for confluences with context
+    if (result) {
+      // We don't need to await this - let it run asynchronously
+      this.checkConfluencesWithContext(groupId, transaction)
+        .catch(err => logger.error(`Error checking confluences after transaction: ${err.message}`));
+    }
+    
+    return result;
   },
   
   /**
-   * Check for confluences
+   * Check for confluences - using the optimized integrated detector
    * @param {string} groupId - Group ID
    * @returns {Promise<Array>} - List of detected confluences
    */
   async checkConfluences(groupId = 'default') {
-    return confluenceDetector.checkConfluences(groupId);
+    return integratedConfluenceDetector.checkConfluences(groupId);
+  },
+  
+  /**
+   * Check for confluences with transaction context for optimization
+   * @param {string} groupId - Group ID
+   * @param {Object} transaction - Current transaction being processed
+   * @returns {Promise<Array>} - List of detected confluences
+   */
+  async checkConfluencesWithContext(groupId, transaction) {
+    return integratedConfluenceDetector.checkConfluences(groupId, transaction);
   },
   
   /**
@@ -185,6 +131,121 @@ const confluenceService = {
    */
   async getAllGroupSettings(groupId) {
     return groupSettingsManager.getAllGroupSettings(groupId);
+  },
+  
+  /**
+   * Force synchronization between memory cache and database
+   * Useful for admin operations
+   * @returns {Promise<void>}
+   */
+  async forceSyncWithDatabase() {
+    return integratedConfluenceDetector.syncCacheWithDatabase();
+  },
+  
+  /**
+   * Get statistics about stored confluences
+   * @returns {Promise<Object>} Confluence statistics
+   */
+  async getConfluenceStats() {
+    return confluenceDbService.getConfluenceStats();
+  },
+  
+  /**
+   * Update queue processor to use optimized detection
+   * Call this immediately after starting the app
+   */
+  async setupQueueProcessor() {
+    try {
+      const queueManager = require('../queueService');
+      
+      // Modify the processTransactionForGroup method to use context-aware confluence detection
+      const originalProcessTransactionForGroup = queueManager.processTransactionForGroup.bind(queueManager);
+      
+      queueManager.processTransactionForGroup = async function(transaction, groupId) {
+        try {
+          // Extract metadata if available (for confluence filtering)
+          const meta = transaction._meta || {};
+          delete transaction._meta; // Remove metadata before processing
+          
+          // Add the transaction to MongoDB via the service
+          await require('../../db').storeTransaction(transaction, groupId);
+          
+          // This guarantees that processing happens in isolation for each group
+          // Use the context-aware confluence detection to improve performance
+          const allConfluences = await confluenceService.checkConfluencesWithContext(groupId, transaction);
+          
+          // If we have token filtering information and confluences
+          if (allConfluences.length > 0 && (meta.currentToken || meta.currentTokenAddress)) {
+            // Filter to only show confluences related to the current token
+            const relevantConfluences = allConfluences.filter(confluence => 
+              confluence.coin === meta.currentToken || 
+              (meta.currentTokenAddress && confluence.coinAddress === meta.currentTokenAddress)
+            );
+            
+            // Log the filtering
+            if (allConfluences.length > relevantConfluences.length) {
+              logger.debug(`Filtered ${allConfluences.length} confluences down to ${relevantConfluences.length} relevant to token ${meta.currentToken || meta.currentTokenAddress}`);
+            }
+            
+            // If relevant confluences are detected, send alerts
+            if (relevantConfluences && relevantConfluences.length > 0) {
+              const telegramService = require('../telegramService'); // Require here to avoid circular dependencies
+              
+              for (const confluence of relevantConfluences) {
+                try {
+                  // Format the message
+                  const message = telegramService.formatConfluenceMessage(confluence);
+                  
+                  // Send the alert via bot
+                  await this.sendConfluenceAlert(groupId, message);
+                  
+                  logger.info(`Confluence alert sent for ${confluence.coin} in group ${groupId}: ${confluence.wallets.length} wallets`);
+                } catch (alertError) {
+                  logger.error(`Error sending confluence alert: ${alertError.message}`);
+                }
+              }
+            }
+          }
+          
+          return true;
+        } catch (error) {
+          logger.error(`Error processing transaction for group ${groupId}: ${error.message}`);
+          throw error; // Rethrow to trigger retry mechanism
+        }
+      };
+      
+      logger.info('Queue processor updated to use optimized confluence detection');
+    } catch (error) {
+      logger.error(`Error setting up queue processor: ${error.message}`);
+    }
+  },
+  
+  /**
+   * Optimize memory usage by removing old data
+   * @returns {Promise<void>}
+   */
+  async optimizeMemoryUsage() {
+    try {
+      // Clean old transactions from cache
+      await cacheManager.cleanOldTransactions();
+      
+      // Clean old data from database
+      const transactionService = require('../../db/services/transactionService');
+      await transactionService.cleanupOldTransactions(48);
+      
+      // Deactivate old confluences
+      await confluenceDbService.deactivateOldConfluences(48);
+      
+      // Force garbage collection if Node.js allows it
+      if (global.gc) {
+        global.gc();
+        logger.info('Forced garbage collection after optimization');
+      }
+      
+      logger.info('Memory usage optimized');
+    } catch (error) {
+      logger.error(`Error optimizing memory usage: ${error.message}`);
+    }
   }
 };
 

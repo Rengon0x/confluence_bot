@@ -2,6 +2,7 @@
 const logger = require('../utils/logger');
 const { getDatabase } = require('../db/connection');
 const TransactionModel = require('../db/models/transaction');
+const confluenceDbService = require('../db/services/confluenceDbService');
 const birdeyeService = require('./birdeyeService');
 const config = require('../config/config');
 
@@ -22,8 +23,8 @@ const recapService = {
       
       logger.info(`Getting performance data for group ${groupId} since ${cutoffTime.toISOString()} (${timeframeHours}h timeframe)`);
       
-      // Get all confluences in the timeframe
-      const confluences = await this.getConfluencesInTimeframe(groupId, cutoffTime);
+      // Get confluences from database (instead of calculating from transactions)
+      const confluences = await confluenceDbService.getConfluencesInTimeframe(groupId, cutoffTime);
       
       logger.info(`Found ${confluences.length} confluences in the timeframe for group ${groupId}`);
       
@@ -31,8 +32,27 @@ const recapService = {
         return { confluences: [] };
       }
       
+      // Format confluences to match the expected structure for performance analysis
+      const formattedConfluences = confluences.map(conf => ({
+        tokenName: conf.tokenSymbol,
+        tokenAddress: conf.tokenAddress,
+        detectionTimestamp: conf.timestamp,
+        detectionMarketCap: conf.avgMarketCap,
+        totalUniqueWallets: conf.count,
+        wallets: conf.wallets.map(w => w.walletName),
+        transactions: conf.wallets.flatMap(wallet => 
+          wallet.transactions ? wallet.transactions : [{
+            walletName: wallet.walletName,
+            type: wallet.type,
+            amount: wallet.amount,
+            baseAmount: wallet.baseAmount,
+            timestamp: conf.timestamp
+          }]
+        )
+      }));
+      
       // Get performance data for each confluence
-      const performanceData = await this.getConfluencesPerformance(confluences);
+      const performanceData = await this.getConfluencesPerformance(formattedConfluences);
       
       // Calculate wallet performance
       const walletPerformance = this.calculateWalletPerformance(performanceData);
@@ -53,12 +73,24 @@ const recapService = {
 
   /**
    * Get confluences that occurred within a specific timeframe
+   * Fallback method that uses transactions when no confluences in database
    * @param {string} groupId - Group ID
    * @param {Date} cutoffTime - Cutoff timestamp
    * @returns {Promise<Array>} - List of confluences
    */
   async getConfluencesInTimeframe(groupId, cutoffTime) {
     try {
+      // First try to get confluences from dedicated collection
+      const dbConfluences = await confluenceDbService.getConfluencesInTimeframe(groupId, cutoffTime);
+      
+      if (dbConfluences && dbConfluences.length > 0) {
+        logger.info(`Found ${dbConfluences.length} confluences in database for group ${groupId}`);
+        return dbConfluences;
+      }
+      
+      // Fallback to calculating from transactions if no confluences found
+      logger.info(`No confluences found in database, calculating from transactions for group ${groupId}`);
+      
       const db = await getDatabase();
       const collection = db.collection(TransactionModel.collectionName);
       
@@ -77,6 +109,7 @@ const recapService = {
       }
       
       // Group transactions by token to find confluences
+      // Prioritize coinAddress over coin name for grouping
       const tokens = await collection.aggregate([
         // Step 1: Match transactions in the specified timeframe for this group
         {
@@ -89,12 +122,13 @@ const recapService = {
         {
           $sort: { timestamp: 1 }
         },
-        // Step 3: Group by token (using both address and name as some tokens may not have address)
+        // Step 3: Group primarily by token address, with name as a fallback
         {
           $group: {
             _id: { 
-              coinAddress: "$coinAddress", 
-              coin: "$coin" 
+              // Use address as primary identifier when available, else use name
+              coinAddress: { $cond: [{ $ne: ["$coinAddress", ""] }, "$coinAddress", null] },
+              coin: { $cond: [{ $eq: ["$coinAddress", ""] }, "$coin", "$coin"] } // Always include coin name
             },
             wallets: { $addToSet: "$walletName" },
             transactions: { $push: "$$ROOT" },
@@ -146,9 +180,21 @@ const recapService = {
           detectionTimestamp = sortedTx[0].timestamp;
         }
         
+        // Get a guaranteed token address if available in any transaction
+        let bestTokenAddress = token._id.coinAddress;
+        if (!bestTokenAddress) {
+          // Look through all transactions to find any valid address
+          for (const tx of token.transactions) {
+            if (tx.coinAddress && tx.coinAddress.trim().length > 0) {
+              bestTokenAddress = tx.coinAddress;
+              break;
+            }
+          }
+        }
+        
         return {
           tokenName: token._id.coin,
-          tokenAddress: token._id.coinAddress,
+          tokenAddress: bestTokenAddress, // Use the best available address
           detectionTimestamp: detectionTimestamp || token.firstTimestamp,
           detectionMarketCap: token.marketCap,
           totalUniqueWallets: token.wallets.length,
@@ -200,6 +246,7 @@ const recapService = {
       const enhancedConfluences = [...confluences];
       
       for (const result of athResults) {
+        // Match by address first, which is more reliable
         const matchingConfIndex = enhancedConfluences.findIndex(
           conf => conf.tokenAddress === result.tokenAddress
         );
@@ -442,7 +489,53 @@ const recapService = {
     } else {
       return marketCap.toString();
     }
-  }
+  },
+
+  /**
+   * Get first confluence detected for each token in a group
+   * @param {string} groupId - Group ID
+   * @param {boolean} useTransactionCalc - Whether to use transaction calculation as fallback
+   * @returns {Promise<Array>} Unique token confluences
+   */
+  async getFirstConfluencesPerToken(groupId, useTransactionCalc = true) {
+    try {
+      // Get confluences from DB first (more efficient)
+      const dbConfluences = await confluenceDbService.getFirstConfluencesPerToken(groupId);
+      
+      if (dbConfluences && dbConfluences.length > 0) {
+        logger.info(`Found ${dbConfluences.length} first confluences per token in database for group ${groupId}`);
+        
+        // Format to match expected structure
+        return dbConfluences.map(conf => ({
+          tokenName: conf.tokenSymbol,
+          tokenAddress: conf.tokenAddress,
+          detectionTimestamp: conf.timestamp,
+          detectionMarketCap: conf.avgMarketCap,
+          totalUniqueWallets: conf.count,
+          wallets: conf.wallets.map(w => w.walletName || w.walletAddress),
+          transactions: conf.wallets.map(wallet => ({
+            walletName: wallet.walletName,
+            type: wallet.type,
+            amount: wallet.amount,
+            baseAmount: wallet.baseAmount,
+            timestamp: conf.timestamp
+          }))
+        }));
+      }
+      
+      // Fallback to transaction-based calculation if needed and allowed
+      if (useTransactionCalc) {
+        logger.info(`No first confluences found in database, calculating from transactions for group ${groupId}`);
+        const cutoffTime = new Date(Date.now() - (48 * 60 * 60 * 1000)); // 48 hours
+        return this.getConfluencesInTimeframe(groupId, cutoffTime);
+      }
+      
+      return [];
+    } catch (error) {
+      logger.error(`Error in getFirstConfluencesPerToken: ${error.message}`);
+      return [];
+    }
+  }  
 };
 
 module.exports = recapService;

@@ -11,6 +11,7 @@ const analyzeAllCommand = require('./analyzeAllCommand');
 const addUserCommand = require('./addUserCommand');
 const removeUserCommand = require('./removeUserCommand');
 const listUsersCommand = require('./listUsersCommand');
+const statsCommand = require('./statsCommand');
 
 // Export all admin commands
 module.exports = [
@@ -22,6 +23,7 @@ module.exports = [
   buyTxCommand,
   simulateUsdcCommand,
   analyzeAllCommand,
+  statsCommand,
   stablecoinTxCommands.buyTxUsdcCommand,
   stablecoinTxCommands.buyTxUsdtCommand,
   stablecoinTxCommands.sellTxUsdcCommand,

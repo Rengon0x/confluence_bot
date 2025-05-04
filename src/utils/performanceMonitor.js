@@ -51,6 +51,9 @@ class PerformanceMonitor {
     // Initialize timestamp for periodic reporting
     this.lastReportTime = Date.now();
     this.reportInterval = 3600000; // Report every hour
+    
+    // Store the last performance report
+    this.lastReport = null;
   }
   
   /**
@@ -156,9 +159,16 @@ class PerformanceMonitor {
   
   /**
    * Generate a comprehensive performance report
+   * @param {boolean} storeOnly - If true, only store report without logging
+   * @returns {Object} Report data
    */
-  generatePerformanceReport() {
-    logger.info('========== PERFORMANCE REPORT ==========');
+  generatePerformanceReport(storeOnly = false) {
+    const reportLines = [];
+    const reportData = {};
+    
+    if (!storeOnly) {
+      reportLines.push('========== PERFORMANCE REPORT ==========');
+    }
     
     for (const [category, metrics] of Object.entries(this.metrics)) {
       // Skip categories with no data
@@ -174,24 +184,101 @@ class PerformanceMonitor {
       const slowestOps = [...metrics.times]
         .sort((a, b) => b.time - a.time)
         .slice(0, 3)
-        .map(entry => `"${entry.operation}" (${entry.time.toFixed(2)}ms)`);
+        .map(entry => ({
+          operation: entry.operation,
+          time: entry.time.toFixed(2)
+        }));
       
-      logger.info(`${category.toUpperCase()}: Avg=${metrics.avg.toFixed(2)}ms, Max=${metrics.max.toFixed(2)}ms`);
-      logger.info(`  - Percentiles: P50=${p50.toFixed(2)}ms, P90=${p90.toFixed(2)}ms, P99=${p99.toFixed(2)}ms`);
-      logger.info(`  - Alerts: ${metrics.alerts} | Samples: ${metrics.times.length}`);
+      // Store data for report
+      reportData[category] = {
+        avg: metrics.avg.toFixed(2),
+        max: metrics.max.toFixed(2),
+        p50: p50.toFixed(2),
+        p90: p90.toFixed(2),
+        p99: p99.toFixed(2),
+        alerts: metrics.alerts,
+        samples: metrics.times.length,
+        slowestOps
+      };
       
-      if (slowestOps.length > 0) {
-        logger.info(`  - Slowest operations: ${slowestOps.join(', ')}`);
-      }
-      
-      // Alert if P90 is approaching threshold
-      const threshold = this.config.alertThresholds[category];
-      if (p90 > threshold * 0.7) {
-        logger.warn(`  ⚠️ 90% of ${category} operations are taking more than ${p90.toFixed(2)}ms (threshold: ${threshold}ms)`);
+      if (!storeOnly) {
+        reportLines.push(`${category.toUpperCase()}: Avg=${metrics.avg.toFixed(2)}ms, Max=${metrics.max.toFixed(2)}ms`);
+        reportLines.push(`  - Percentiles: P50=${p50.toFixed(2)}ms, P90=${p90.toFixed(2)}ms, P99=${p99.toFixed(2)}ms`);
+        reportLines.push(`  - Alerts: ${metrics.alerts} | Samples: ${metrics.times.length}`);
+        
+        if (slowestOps.length > 0) {
+          reportLines.push(`  - Slowest operations: ${slowestOps.map(op => `"${op.operation}" (${op.time}ms)`).join(', ')}`);
+        }
+        
+        // Alert if P90 is approaching threshold
+        const threshold = this.config.alertThresholds[category];
+        if (p90 > threshold * 0.7) {
+          reportLines.push(`  ⚠️ 90% of ${category} operations are taking more than ${p90.toFixed(2)}ms (threshold: ${threshold}ms)`);
+        }
       }
     }
     
-    logger.info('=========================================');
+    if (!storeOnly) {
+      reportLines.push('=========================================');
+      
+      // Log the report
+      for (const line of reportLines) {
+        logger.info(line);
+      }
+    }
+    
+    // Store the report with timestamp
+    this.lastReport = {
+      timestamp: new Date(),
+      data: reportData,
+      text: reportLines.join('\n')
+    };
+    
+    return this.lastReport;
+  }
+  
+  /**
+   * Get the last generated performance report
+   * @returns {Object|null} Last report or null if none available
+   */
+  getLastReport() {
+    if (!this.lastReport) {
+      // Generate a new report if none exists
+      return this.generatePerformanceReport(true);
+    }
+    return this.lastReport;
+  }
+  
+  /**
+   * Generate a formatted performance report for display
+   * @returns {string} Formatted report
+   */
+  getFormattedReport() {
+    const report = this.getLastReport();
+    if (!report) {
+      return "No performance data available yet";
+    }
+    
+    let formatted = `📊 *Performance Report* (${new Date(report.timestamp).toISOString()})\n\n`;
+    
+    for (const [category, metrics] of Object.entries(report.data)) {
+      formatted += `*${category.toUpperCase()}*\n`;
+      formatted += `- Avg: ${metrics.avg}ms | Max: ${metrics.max}ms\n`;
+      formatted += `- Percentiles: P50=${metrics.p50}ms, P90=${metrics.p90}ms, P99=${metrics.p99}ms\n`;
+      
+      if (metrics.slowestOps.length > 0) {
+        formatted += `- Slowest operations:\n`;
+        metrics.slowestOps.forEach((op, idx) => {
+          formatted += `  ${idx+1}. "${op.operation}" (${op.time}ms)\n`;
+        });
+      }
+      
+      formatted += `- Alerts: ${metrics.alerts} | Samples: ${metrics.samples}\n\n`;
+    }
+    
+    formatted += `_Performance data based on recent operations_`;
+    
+    return formatted;
   }
   
   /**

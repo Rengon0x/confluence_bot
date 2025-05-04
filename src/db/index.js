@@ -7,6 +7,7 @@ const groupService = require('./services/groupService');
 const setupService = require('./services/setupService');
 const transactionService = require('./services/transactionService');
 const betaUserService = require('./services/betaUserService');
+const confluenceDbService = require('./services/confluenceDbService');
 const validators = require('./utils/validators');
 
 // Export everything
@@ -22,7 +23,8 @@ module.exports = {
   groupService,
   setupService,
   transactionService,
-  betaUserService, // Add beta user service
+  betaUserService,
+  confluenceDbService,
   
   // Utils
   validators,
@@ -90,5 +92,18 @@ module.exports = {
   
   async getAllBetaUsers() {
     return betaUserService.getAllBetaUsers();
+  },
+  
+  // Confluence Service helpers
+  async getConfluenceStats() {
+    return confluenceDbService.getConfluenceStats();
+  },
+  
+  async getConfluencesInTimeframe(groupId, cutoffTime) {
+    return confluenceDbService.getConfluencesInTimeframe(groupId, cutoffTime);
+  },
+  
+  async findConfluence(groupId, tokenAddress, tokenSymbol) {
+    return confluenceDbService.findConfluence(groupId, tokenAddress, tokenSymbol);
   }
 };

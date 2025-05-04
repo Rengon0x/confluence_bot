@@ -168,6 +168,7 @@ class MemoryQueueManager {
   
   /**
    * Process a transaction for a specific group
+   * Uses optimized confluence detection with transaction context
    * @param {Object} transaction - Transaction data
    * @param {string} groupId - Group ID
    * @returns {Promise<boolean>} - Success status
@@ -178,11 +179,12 @@ class MemoryQueueManager {
       const meta = transaction._meta || {};
       delete transaction._meta; // Remove metadata before processing
       
-      // This guarantees that processing happens in isolation for each group
-      await confluenceService.addTransaction(transaction, groupId);
+      // Add the transaction to MongoDB via the service
+      await require('../db').storeTransaction(transaction, groupId);
       
-      // Check for confluences for this group after adding the transaction
-      const allConfluences = await confluenceService.checkConfluences(groupId);
+      // This guarantees that processing happens in isolation for each group
+      // Use the context-aware confluence detection to improve performance
+      const allConfluences = await confluenceService.checkConfluencesWithContext(groupId, transaction);
       
       // If we have token filtering information and confluences
       if (allConfluences.length > 0 && (meta.currentToken || meta.currentTokenAddress)) {
@@ -341,4 +343,11 @@ class MemoryQueueManager {
 
 // Singleton instance
 const queueManager = new MemoryQueueManager();
+
+// Initialize the optimized detection immediately
+// This is done to ensure we're using the DB-backed detection for better performance
+confluenceService.setupQueueProcessor()
+  .then(() => logger.info('Queue processor updated to use optimized confluence detection'))
+  .catch(err => logger.error(`Failed to update queue processor: ${err.message}`));
+
 module.exports = queueManager;

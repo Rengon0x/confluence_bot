@@ -6,6 +6,9 @@ const config = require('../config/config');
 const TrackerModel = require('./models/tracker');
 const GroupModel = require('./models/group');
 const TransactionModel = require('./models/transaction');
+const ConfluenceModel = require('./models/confluence');
+const BetaUserModel = require('./models/betaUser');
+const UserWalletModel = require('./models/userWallet');
 
 let mongoClient = null;
 let db = null;
@@ -96,6 +99,34 @@ async function setupIndexes(database) {
             }
         }
         
+        // Create indexes for confluences collection
+        if (ConfluenceModel.indexes) {
+            const confluenceCollection = database.collection(ConfluenceModel.collectionName);
+            for (const index of ConfluenceModel.indexes) {
+                await createOrUpdateIndex(confluenceCollection, index);
+            }
+        }
+        
+        // Create indexes for beta users collection
+        if (BetaUserModel.indexes) {
+            const betaUserCollection = database.collection(BetaUserModel.collectionName || 'betausers');
+            for (const index of BetaUserModel.indexes) {
+                try {
+                    await createOrUpdateIndex(betaUserCollection, index);
+                } catch (err) {
+                    logger.warn(`Error creating index for beta users: ${err.message}`);
+                }
+            }
+        }
+        
+        // Create indexes for user wallets collection
+        if (UserWalletModel.indexes) {
+            const userWalletCollection = database.collection(UserWalletModel.collectionName || 'userwallets');
+            for (const index of UserWalletModel.indexes) {
+                await createOrUpdateIndex(userWalletCollection, index);
+            }
+        }
+        
         logger.info("MongoDB indexes created successfully");
     } catch (error) {
         logger.error("Error creating MongoDB indexes:", error);
@@ -106,37 +137,54 @@ async function setupIndexes(database) {
 // Helper function to create or update an index
 async function createOrUpdateIndex(collection, indexSpec) {
     try {
-        // Try to create the index normally
-        await collection.createIndex(indexSpec.key, { 
+        // Add sparse option to unique indexes to allow multiple documents with missing fields
+        const options = { 
             unique: indexSpec.unique || false,
-            background: true,
+            background: indexSpec.background || true,
+            sparse: indexSpec.sparse === undefined ? indexSpec.unique : indexSpec.sparse, // default sparse=true for unique indexes
             ...(indexSpec.expireAfterSeconds && { expireAfterSeconds: indexSpec.expireAfterSeconds })
-        });
+        };
+        
+        // Try to create the index normally
+        await collection.createIndex(indexSpec.key, options);
     } catch (error) {
         // If the error indicates an existing index with the same name but different options
         if (error.message && error.message.includes("existing index")) {
             try {
-                // Get the index name
-                const indexName = Object.keys(indexSpec.key).map(k => `${k}_1`).join('_');
+                // Get the index name based on key fields
+                let indexName = '';
+                Object.entries(indexSpec.key).forEach(([field, direction]) => {
+                    indexName += `${field}_${direction}`;
+                });
                 
-                // Drop the existing index
-                logger.info(`Dropping existing index ${indexName} to recreate with new options`);
-                await collection.dropIndex(indexName);
+                // Try dropping the existing index if we can identify it
+                if (indexName) {
+                    logger.debug(`Attempting to drop existing index ${indexName} to recreate`);
+                    try {
+                        await collection.dropIndex(indexName);
+                        logger.debug(`Successfully dropped index ${indexName}`);
+                    } catch (dropError) {
+                        logger.debug(`Could not drop index by name: ${dropError.message}`);
+                        // Continue without dropping - the error will be caught below
+                    }
+                }
                 
                 // Retry creating the index
                 await collection.createIndex(indexSpec.key, { 
                     unique: indexSpec.unique || false,
-                    background: true,
+                    background: indexSpec.background || true,
+                    sparse: indexSpec.sparse === undefined ? indexSpec.unique : indexSpec.sparse,
                     ...(indexSpec.expireAfterSeconds && { expireAfterSeconds: indexSpec.expireAfterSeconds })
                 });
                 
-                logger.info(`Successfully recreated index ${indexName} with new options`);
-            } catch (dropError) {
-                logger.error(`Error dropping and recreating index: ${dropError.message}`);
-                throw dropError;
+                logger.debug(`Successfully recreated index for fields: ${Object.keys(indexSpec.key).join(', ')}`);
+            } catch (retryError) {
+                // Just log the error but don't throw - this allows other indexes to be created
+                logger.warn(`Error recreating index: ${retryError.message}`);
             }
         } else {
-            throw error;
+            // Just log the error but don't throw - this allows other indexes to be created
+            logger.warn(`Error creating index: ${error.message}`);
         }
     }
 }

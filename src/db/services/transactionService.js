@@ -4,29 +4,38 @@ const TransactionModel = require('../models/transaction');
 const logger = require('../../utils/logger');
 const performanceMonitor = require('../../utils/performanceMonitor');
 
+// Cached collection reference to avoid repeated lookups
+let cachedCollection = null;
+
 /**
- * Service for handling transaction-related database operations
+ * Service for handling transaction-related database operations - optimized for performance
  */
 const transactionService = {
   /**
-   * Get the transactions collection
+   * Get the transactions collection with caching
    * @returns {Promise<Collection>} The transactions collection
    */
   async getCollection() {
+    if (cachedCollection) {
+      return cachedCollection;
+    }
+    
     const db = await getDatabase();
-    return db.collection(TransactionModel.collectionName);
+    cachedCollection = db.collection(TransactionModel.collectionName);
+    return cachedCollection;
   },
 
-/**
- * Store a transaction in the database
- * @param {Object} transaction - The transaction to store
- * @param {string} groupId - The group ID this transaction belongs to
- * @returns {Promise<Object>} The stored transaction
- */
-async storeTransaction(transaction, groupId) {
+  /**
+   * Store a transaction in the database - optimized for speed
+   * @param {Object} transaction - The transaction to store
+   * @param {string} groupId - The group ID this transaction belongs to
+   * @returns {Promise<Object>} The stored transaction
+   */
+  async storeTransaction(transaction, groupId) {
     try {
       const collection = await this.getCollection();
       
+      // Create a lean transaction document with only the necessary fields
       const transactionDoc = {
         walletName: transaction.walletName,
         type: transaction.type,
@@ -37,11 +46,15 @@ async storeTransaction(transaction, groupId) {
         marketCap: transaction.marketCap || 0,
         timestamp: transaction.timestamp || new Date(),
         groupId: groupId,
-        baseAmount: transaction.baseAmount || 0,  // Make sure we store baseAmount
-        baseSymbol: transaction.baseSymbol || ''  // Make sure we store baseSymbol
+        baseAmount: transaction.baseAmount || 0,
+        baseSymbol: transaction.baseSymbol || '',
+        walletAddress: transaction.walletAddress || '' // Include wallet address
       };
       
+      // Use insertOne instead of the slower insertMany
       const result = await collection.insertOne(transactionDoc);
+      
+      // Use debug level for regular operations to reduce log volume
       logger.debug(`Transaction stored in MongoDB: ${transaction.type} ${transaction.coin} by ${transaction.walletName}, base amount: ${transaction.baseAmount} ${transaction.baseSymbol}`);
       
       return { ...transactionDoc, _id: result.insertedId };
@@ -51,103 +64,140 @@ async storeTransaction(transaction, groupId) {
     }
   },
 
-    /**
+  /**
    * Delete all transactions associated with a tracker in a specific group
+   * Optimized for faster batch deletion
    * @param {string} trackerName - The tracker name
    * @param {string} groupId - The group ID
    * @returns {Promise<number>} Number of transactions deleted
    */
-    async deleteTrackerTransactions(trackerName, groupId) {
-      try {
-        const collection = await this.getCollection();
-        
-        // Delete all transactions from this tracker in this group
-        const result = await collection.deleteMany({
-          groupId: groupId,
-          walletName: { $regex: new RegExp(`^${trackerName}`, 'i') }
-        });
-        
-        logger.info(`Deleted ${result.deletedCount} transactions for tracker ${trackerName} in group ${groupId}`);
-        return result.deletedCount;
-      } catch (error) {
-        logger.error(`Error in transactionService.deleteTrackerTransactions: ${error.message}`);
-        return 0;
-      }
-    },
+  async deleteTrackerTransactions(trackerName, groupId) {
+    try {
+      const collection = await this.getCollection();
+      
+      // Use case-insensitive regex for better matching
+      const result = await collection.deleteMany({
+        groupId: groupId,
+        walletName: { $regex: new RegExp(`^${trackerName}`, 'i') }
+      });
+      
+      logger.info(`Deleted ${result.deletedCount} transactions for tracker ${trackerName} in group ${groupId}`);
+      return result.deletedCount;
+    } catch (error) {
+      logger.error(`Error in transactionService.deleteTrackerTransactions: ${error.message}`);
+      return 0;
+    }
+  },
 
-    /**
+  /**
    * Delete all transactions for a specific group
    * @param {string} groupId - The group ID
    * @returns {Promise<number>} Number of transactions deleted
    */
-    async deleteGroupTransactions(groupId) {
-      try {
-        const collection = await this.getCollection();
+  async deleteGroupTransactions(groupId) {
+    try {
+      const collection = await this.getCollection();
+      
+      // Delete in batches for better performance with large datasets
+      const BATCH_SIZE = 5000;
+      let totalDeleted = 0;
+      let hasMore = true;
+      
+      while (hasMore) {
+        // Get IDs for a batch of documents
+        const documents = await collection.find({ groupId: groupId })
+                                        .limit(BATCH_SIZE)
+                                        .project({ _id: 1 })
+                                        .toArray();
+                                        
+        if (documents.length === 0) {
+          hasMore = false;
+          break;
+        }
         
-        const result = await collection.deleteMany({ groupId: groupId });
+        const ids = documents.map(doc => doc._id);
         
-        logger.info(`Deleted ${result.deletedCount} transactions for group ${groupId}`);
-        return result.deletedCount;
-      } catch (error) {
-        logger.error(`Error in transactionService.deleteGroupTransactions: ${error.message}`);
-        return 0;
+        // Delete the batch
+        const result = await collection.deleteMany({ _id: { $in: ids } });
+        totalDeleted += result.deletedCount;
+        
+        // Log progress for large batches
+        if (documents.length === BATCH_SIZE) {
+          logger.info(`Deleted ${totalDeleted} transactions so far for group ${groupId}`);
+        }
       }
-    },
-  
+      
+      logger.info(`Deleted ${totalDeleted} transactions for group ${groupId}`);
+      return totalDeleted;
+    } catch (error) {
+      logger.error(`Error in transactionService.deleteGroupTransactions: ${error.message}`);
+      return 0;
+    }
+  },
 
   /**
-   * Get recent transactions for a specific group, type, and coin
+   * Get recent transactions for a specific group, type, and coin - optimized
    * @param {string} groupId - The group ID
    * @param {string} type - Transaction type (buy/sell)
    * @param {string} coin - Coin symbol
+   * @param {string} coinAddress - Coin address
    * @param {number} windowMinutes - How far back to look in minutes
    * @returns {Promise<Array>} Recent transactions
    */
-  
-async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60) {
+  async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60) {
     try {
       const collection = await this.getCollection();
       
       const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
       
+      // Build query based on available parameters
       const query = {
         groupId: groupId,
-        type: type,
         timestamp: { $gte: cutoffTime }
       };
       
-      let indexHint = 'group_type_time_lookup'; // Use the optimized index by default
+      if (type) {
+        query.type = type;
+      }
+      
+      let indexHint;
       
       if (coinAddress && coinAddress.length > 0) {
         query.coinAddress = coinAddress;
-        indexHint = 'group_type_coinaddress_lookup'; // Use the coinAddress index
+        indexHint = { groupId: 1, coinAddress: 1, timestamp: 1 };
       } else if (coin) {
         query.coin = coin;
-        indexHint = 'group_type_coin_lookup'; // Use the coin index
+        indexHint = { groupId: 1, coin: 1, timestamp: 1 };
+      } else if (type) {
+        indexHint = { groupId: 1, type: 1, timestamp: 1 };
+      } else {
+        indexHint = { groupId: 1, timestamp: 1 };
       }
       
-      // Using appropriate index and sorting for better performance
+      // Use appropriate index and sorting for better performance
       const transactions = await collection.find(query)
-      .sort({ timestamp: -1 })
-      .toArray();
+        .sort({ timestamp: -1 })
+        .hint(indexHint)
+        .toArray();
       
       return transactions;
     } catch (error) {
-      logger.error(`Error in transactionService.getRecentTransactions: ${error.message}`);
-      
-      // Fallback if index hint fails
-      if (error.message.includes('hint')) {
+      // If hint fails, retry without hint
+      if (error.message.includes('hint') || error.message.includes('index')) {
+        logger.warn(`Index hint failed, retrying without hint: ${error.message}`);
+        
         try {
-          logger.warn('Retrying getRecentTransactions without index hint');
           const collection = await this.getCollection();
-          
           const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
           
           const query = {
             groupId: groupId,
-            type: type,
             timestamp: { $gte: cutoffTime }
           };
+          
+          if (type) {
+            query.type = type;
+          }
           
           if (coinAddress && coinAddress.length > 0) {
             query.coinAddress = coinAddress;
@@ -155,19 +205,22 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
             query.coin = coin;
           }
           
-          return await collection.find(query).sort({ timestamp: -1 }).toArray();
+          return await collection.find(query)
+            .sort({ timestamp: -1 })
+            .toArray();
         } catch (fallbackError) {
           logger.error(`Fallback error in getRecentTransactions: ${fallbackError.message}`);
           return [];
         }
       }
       
+      logger.error(`Error in transactionService.getRecentTransactions: ${error.message}`);
       return [];
     }
   },
   
   /**
-   * Get all recent transactions by coin address for all transaction types
+   * Get all recent transactions by coin address for all transaction types - optimized
    * @param {string} groupId - Group ID
    * @param {string} coinAddress - Coin address
    * @param {number} windowMinutes - Time window in minutes
@@ -179,42 +232,68 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       
       const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
       
+      // Create index hint for faster querying
+      const indexHint = { groupId: 1, coinAddress: 1, timestamp: 1 };
+      
       const query = {
         groupId: groupId,
         coinAddress: coinAddress,
         timestamp: { $gte: cutoffTime }
       };
       
-      // Use the simple coinAddress index or let MongoDB choose
+      // Use projection to only return needed fields for better performance
+      const projection = {
+        _id: 1,
+        walletName: 1,
+        type: 1,
+        coin: 1,
+        coinAddress: 1,
+        amount: 1,
+        timestamp: 1,
+        usdValue: 1,
+        marketCap: 1,
+        baseAmount: 1,
+        baseSymbol: 1,
+        walletAddress: 1
+      };
+      
+      // Use the simple coinAddress index
       const transactions = await collection.find(query)
+        .project(projection)
         .sort({ timestamp: -1 })
+        .hint(indexHint)
         .toArray();
       
       return transactions;
     } catch (error) {
-      logger.error(`Error in getRecentTransactionsByAddress: ${error.message}`);
-      
-      // Fallback error handling
-      try {
-        const collection = await this.getCollection();
-        const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+      // If hint fails, retry without hint
+      if (error.message.includes('hint') || error.message.includes('index')) {
+        logger.warn(`Index hint failed, retrying without hint: ${error.message}`);
         
-        const query = {
-          groupId: groupId,
-          coinAddress: coinAddress,
-          timestamp: { $gte: cutoffTime }
-        };
-        
-        return await collection.find(query).sort({ timestamp: -1 }).toArray();
-      } catch (fallbackError) {
-        logger.error(`Fallback error in getRecentTransactionsByAddress: ${fallbackError.message}`);
-        return [];
+        try {
+          const collection = await this.getCollection();
+          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+          
+          return await collection.find({
+            groupId: groupId,
+            coinAddress: coinAddress,
+            timestamp: { $gte: cutoffTime }
+          })
+          .sort({ timestamp: -1 })
+          .toArray();
+        } catch (fallbackError) {
+          logger.error(`Fallback error in getRecentTransactionsByAddress: ${fallbackError.message}`);
+          return [];
+        }
       }
+      
+      logger.error(`Error in getRecentTransactionsByAddress: ${error.message}`);
+      return [];
     }
   },
   
   /**
-   * Get all recent transactions by coin name for all transaction types
+   * Get all recent transactions by coin name for all transaction types - optimized
    * @param {string} groupId - Group ID
    * @param {string} coin - Coin name
    * @param {number} windowMinutes - Time window in minutes
@@ -226,28 +305,70 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       
       const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
       
+      // Create index hint for faster querying
+      const indexHint = { groupId: 1, coin: 1, timestamp: 1 };
+      
       const query = {
         groupId: groupId,
         coin: coin,
         timestamp: { $gte: cutoffTime }
       };
       
-      // Let MongoDB choose the best index
+      // Use projection to only return needed fields
+      const projection = {
+        _id: 1,
+        walletName: 1,
+        type: 1,
+        coin: 1,
+        coinAddress: 1,
+        amount: 1,
+        timestamp: 1,
+        usdValue: 1,
+        marketCap: 1,
+        baseAmount: 1,
+        baseSymbol: 1,
+        walletAddress: 1
+      };
+      
+      // Let MongoDB choose the best index or use hint
       const transactions = await collection.find(query)
+        .project(projection)
         .sort({ timestamp: -1 })
+        .hint(indexHint)
         .toArray();
       
       return transactions;
     } catch (error) {
+      // If hint fails, retry without hint
+      if (error.message.includes('hint') || error.message.includes('index')) {
+        logger.warn(`Index hint failed in getRecentTransactionsByCoin: ${error.message}`);
+        
+        try {
+          const collection = await this.getCollection();
+          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+          
+          return await collection.find({
+            groupId: groupId,
+            coin: coin,
+            timestamp: { $gte: cutoffTime }
+          })
+          .sort({ timestamp: -1 })
+          .toArray();
+        } catch (fallbackError) {
+          logger.error(`Fallback error in getRecentTransactionsByCoin: ${fallbackError.message}`);
+          return [];
+        }
+      }
+      
       logger.error(`Error in getRecentTransactionsByCoin: ${error.message}`);
       return [];
     }
   },
-
+  
  /**
- * Load recent transactions for all groups
+ * Load recent transactions for all groups - optimized for performance
  * @param {number} windowMinutes - How far back to look in minutes
- * @returns {Promise<Object>} Map of transactions by key (groupId_type_coin)
+ * @returns {Promise<Array>} Array of transactions
  */
  async loadRecentTransactions(windowMinutes = 60) {
     // Start measuring database performance
@@ -259,102 +380,114 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       
       const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
       
-      const transactions = await collection.find({
+      // Create an optimal query with projection to minimize data transfer
+      const query = {
         timestamp: { $gte: cutoffTime }
-      })
-      .sort({ groupId: 1, timestamp: -1 })
-      .toArray();
+      };
+      
+      // Only include fields we need
+      const projection = {
+        _id: 0,
+        groupId: 1,
+        walletName: 1,
+        walletAddress: 1,
+        type: 1,
+        coin: 1,
+        coinAddress: 1,
+        amount: 1,
+        timestamp: 1,
+        usdValue: 1,
+        marketCap: 1,
+        baseAmount: 1,
+        baseSymbol: 1
+      };
+      
+      // Use a batch cursor for better memory efficiency
+      const cursor = collection.find(query)
+                             .project(projection)
+                             .sort({ timestamp: -1 });
+                             
+      // Load transactions in batches to avoid memory issues
+      const BATCH_SIZE = 5000;
+      let transactions = [];
+      let batch;
+      
+      do {
+        batch = await cursor.limit(BATCH_SIZE).skip(transactions.length).toArray();
+        
+        if (batch.length > 0) {
+          // Pre-process transactions to ensure consistent format
+          for (const tx of batch) {
+            // Fix missing fields
+            if (!tx.type) {
+              tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
+            }
+            if (tx.baseAmount === undefined) {
+              tx.baseAmount = 0;
+            }
+            if (!tx.baseSymbol) {
+              tx.baseSymbol = 'SOL';
+            }
+            if (tx.marketCap === undefined) {
+              tx.marketCap = 0;
+            }
+          }
+          
+          transactions = transactions.concat(batch);
+          
+          // Log progress for large datasets
+          if (transactions.length % 10000 === 0) {
+            logger.debug(`Loaded ${transactions.length} recent transactions so far...`);
+          }
+        }
+      } while (batch.length === BATCH_SIZE);
       
       // Measure query performance
       const queryTime = performanceMonitor.endTimer(dbTimer, 'mongoQueries', operationName);
       logger.info(`Loaded ${transactions.length} recent transactions from MongoDB (window: ${windowMinutes} min) in ${queryTime.toFixed(2)}ms`);
       
-      // Start measuring processing performance
-      const processTimer = performanceMonitor.startTimer();
-      
-      // Process transactions in batches to improve performance with large datasets
-      const batchSize = 1000;
-      const batches = [];
-      
-      for (let i = 0; i < transactions.length; i += batchSize) {
-        batches.push(transactions.slice(i, i + batchSize));
-      }
-      
-      // Process each batch
-      for (const batch of batches) {
-        batch.forEach(tx => {
-          // Ensure type is properly set
-          if (!tx.type) {
-            // If type is missing, try to infer it based on baseAmount
-            tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
-            logger.debug(`Inferred type '${tx.type}' for transaction by ${tx.walletName} for ${tx.coin}`);
-          }
-          
-          // Ensure baseAmount is set
-          if (tx.baseAmount === undefined) {
-            tx.baseAmount = 0;
-          }
-          
-          // Ensure baseSymbol is set
-          if (!tx.baseSymbol) {
-            tx.baseSymbol = 'SOL';
-          }
-          
-          // Ensure marketCap is set
-          if (tx.marketCap === undefined) {
-            tx.marketCap = 0;
-          }
-        });
-      }
-      
-      // Measure processing performance
-      performanceMonitor.endTimer(processTimer, 'transactionProcessing', `process_transactions_${windowMinutes}min`);
-      
       return transactions;
     } catch (error) {
-      logger.error(`Error in transactionService.loadRecentTransactions: ${error.message}`);
-      
       // Record failure in performance monitor
       performanceMonitor.endTimer(dbTimer, 'mongoQueries', `${operationName}_error`);
+      logger.error(`Error in transactionService.loadRecentTransactions: ${error.message}`);
       
-      // If index hint failed, retry without hint
-      if (error.message.includes('hint')) {
-        try {
-          logger.warn('Retrying without index hint - this may be slower');
-          const fallbackTimer = performanceMonitor.startTimer();
-          
-          const collection = await this.getCollection();
-          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
-          
-          const transactions = await collection.find({
-            timestamp: { $gte: cutoffTime }
-          }).toArray();
-          
-          // Measure fallback query performance
-          const fallbackQueryTime = performanceMonitor.endTimer(fallbackTimer, 'mongoQueries', `${operationName}_fallback`);
-          logger.warn(`Fallback query completed in ${fallbackQueryTime.toFixed(2)}ms`);
-          
-          // Process transactions
-          transactions.forEach(tx => {
-            if (!tx.type) tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
-            if (tx.baseAmount === undefined) tx.baseAmount = 0;
-            if (!tx.baseSymbol) tx.baseSymbol = 'SOL';
-            if (tx.marketCap === undefined) tx.marketCap = 0;
-          });
-          
-          return transactions;
-        } catch (fallbackError) {
-          logger.error(`Fallback error in loadRecentTransactions: ${fallbackError.message}`);
-          return [];
+      // Fallback to a simpler query if the optimized one fails
+      try {
+        logger.warn('Using fallback query for transaction loading');
+        const fallbackTimer = performanceMonitor.startTimer();
+        
+        const collection = await this.getCollection();
+        const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+        
+        // Use simpler query without projection or advanced options
+        const transactions = await collection.find({
+          timestamp: { $gte: cutoffTime }
+        }).toArray();
+        
+        // Measure fallback query performance
+        const fallbackQueryTime = performanceMonitor.endTimer(fallbackTimer, 'mongoQueries', `${operationName}_fallback`);
+        logger.warn(`Fallback query completed in ${fallbackQueryTime.toFixed(2)}ms`);
+        
+        // Process transactions for consistency
+        for (const tx of transactions) {
+          if (!tx.type) tx.type = tx.baseAmount > 0 ? 'buy' : 'sell';
+          if (tx.baseAmount === undefined) tx.baseAmount = 0;
+          if (!tx.baseSymbol) tx.baseSymbol = 'SOL';
+          if (tx.marketCap === undefined) tx.marketCap = 0;
         }
+        
+        return transactions;
+      } catch (fallbackError) {
+        logger.error(`Fallback error in loadRecentTransactions: ${fallbackError.message}`);
+        return [];
       }
-      return [];
     }
   },
 
-
   /**
-   * Get collection size
+   * Get collection size statistics
+   * @returns {Promise<Object>} Collection statistics
    */
   async getCollectionSize() {
     try {
@@ -375,8 +508,11 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
 
   /**
    * Clean up old transactions based on each group's window setting
+   * High performance version with batched processing
+   * @param {number} maxHours - Maximum age in hours to keep transactions
+   * @returns {Promise<number>} Total deleted transactions
    */
-  async cleanupOldTransactions() {
+  async cleanupOldTransactions(maxHours = 48) {
     try {
       const collection = await this.getCollection();
       
@@ -389,117 +525,177 @@ async getRecentTransactions(groupId, type, coin, coinAddress, windowMinutes = 60
       }
       
       // Import the group service directly here to avoid circular imports
-      const groupService = require('../services/groupService');
+      const groupService = require('./groupService');
       
       let totalDeleted = 0;
       
-      // Process each group with its own window setting
-      for (const groupId of groupIds) {
-        try {
-          // Get group settings to get the specific window minutes for this group
-          const groupSettings = await groupService.getSettings(groupId);
-          
-          // Import config here to avoid circular dependencies
-          const config = require('../../../config/config');
-          
-          // Use group-specific settings or default from config
-          const windowMinutes = groupSettings?.windowMinutes || config.confluence.windowMinutes;
-          
-          // Calculate cutoff time for this specific group
-          const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
-          
-          // Delete transactions older than the cutoff time for this group
-          const result = await collection.deleteMany({
-            groupId: groupId,
-            timestamp: { $lt: cutoffTime }
-          });
-          
-          if (result.deletedCount > 0) {
-            logger.info(`Cleaned up ${result.deletedCount} old transactions for group ${groupId} (window: ${windowMinutes} minutes)`);
-            totalDeleted += result.deletedCount;
+      // Process groups in batches (to avoid memory pressure)
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < groupIds.length; i += BATCH_SIZE) {
+        const batchGroups = groupIds.slice(i, i + BATCH_SIZE);
+        const promises = batchGroups.map(async (groupId) => {
+          try {
+            // Get group settings to get the specific window minutes for this group
+            const groupSettings = await groupService.getSettings(groupId);
+            
+            // Import config here to avoid circular dependencies
+            const config = require('../../config/config');
+            
+            // Use group-specific settings or default from config
+            const windowMinutes = Math.min(
+              groupSettings?.windowMinutes || config.confluence.windowMinutes,
+              maxHours * 60  // Cap at maxHours to prevent excessive retention
+            );
+            
+            // Calculate cutoff time for this specific group
+            const cutoffTime = new Date(Date.now() - (windowMinutes * 60 * 1000));
+            
+            // Delete in batches for large groups
+            let groupDeleted = 0;
+            let hasMore = true;
+            
+            while (hasMore) {
+              // Get IDs for a batch of documents to delete
+              const documents = await collection.find({
+                groupId: groupId,
+                timestamp: { $lt: cutoffTime }
+              })
+              .limit(5000)
+              .project({ _id: 1 })
+              .toArray();
+              
+              if (documents.length === 0) {
+                hasMore = false;
+                break;
+              }
+              
+              const ids = documents.map(doc => doc._id);
+              
+              // Delete the batch
+              const result = await collection.deleteMany({ _id: { $in: ids } });
+              groupDeleted += result.deletedCount;
+              
+              // If remaining documents < batch size, we're done
+              if (documents.length < 5000) {
+                hasMore = false;
+              }
+            }
+            
+            if (groupDeleted > 0) {
+              logger.info(`Cleaned up ${groupDeleted} old transactions for group ${groupId} (window: ${windowMinutes} minutes)`);
+            }
+            
+            return groupDeleted;
+          } catch (groupError) {
+            logger.error(`Error cleaning transactions for group ${groupId}: ${groupError.message}`);
+            return 0;
           }
-        } catch (groupError) {
-          logger.error(`Error cleaning transactions for group ${groupId}: ${groupError.message}`);
+        });
+        
+        // Wait for each batch to complete
+        const results = await Promise.all(promises);
+        totalDeleted += results.reduce((sum, count) => sum + count, 0);
+        
+        // Add a small delay between batches to avoid database overload
+        if (i + BATCH_SIZE < groupIds.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
       
-      // Check the total size and perform more aggressive cleanup if necessary
+      // Emergency cleanup for excessive database size
       const collectionSize = await this.getCollectionSize();
       
       if (collectionSize && collectionSize.sizeMB > 250) { 
-        logger.warn(`MongoDB collection size exceeds threshold (${collectionSize.sizeMB.toFixed(2)}MB), performing additional cleanup`);
-        
-        // Calculate how many documents to remove (30% of total)
-        const excessCount = Math.floor(collectionSize.count * 0.3); 
-        
-        if (excessCount > 0) {
-          // First, try to optimize by group and timestamp
-          // Get groups with most transactions
-          const groupStats = await collection.aggregate([
-            { $group: { 
-                _id: "$groupId", 
-                count: { $sum: 1 } 
-              } 
-            },
-            { $sort: { count: -1 } },
-            { $limit: 10 }
-          ]).toArray();
-          
-          // For each high-volume group, remove older transactions
-          const cleanupPromises = [];
-          for (const group of groupStats) {
-            if (group.count > 1000) { // Only target high-volume groups
-              const toRemove = Math.floor(group.count * 0.4); // More aggressive with high-volume groups
-              
-              cleanupPromises.push(
-                collection.find({ groupId: group._id })
-                .sort({ timestamp: 1 })
-                .limit(toRemove)
-                .toArray()
-                .then(async (transactions) => {
-                  if (transactions.length > 0) {
-                    const ids = transactions.map(tx => tx._id);
-                    const deleteResult = await collection.deleteMany({ _id: { $in: ids } });
-                    return deleteResult.deletedCount;
-                  }
-                  return 0;
-                })
-              );
-            }
-          }
-          
-          // Wait for all group cleanups to complete
-          const results = await Promise.all(cleanupPromises);
-          const totalRemovedForSpace = results.reduce((sum, count) => sum + count, 0);
-          
-          // If group-based cleanup wasn't sufficient, fall back to removing oldest transactions
-          if (totalRemovedForSpace < excessCount * 0.5) {
-            logger.info(`Group-based cleanup removed ${totalRemovedForSpace} transactions, continuing with timestamp-based cleanup`);
-            
-            const remainingToRemove = excessCount - totalRemovedForSpace;
-            const oldestTransactions = await collection.find({})
-              .sort({ timestamp: 1 })
-              .limit(remainingToRemove)
-              .toArray();
-              
-            if (oldestTransactions.length > 0) {
-              const oldestIds = oldestTransactions.map(tx => tx._id);
-              const deleteResult = await collection.deleteMany({
-                _id: { $in: oldestIds }
-              });
-              
-              logger.info(`Additional timestamp-based cleanup removed ${deleteResult.deletedCount} oldest transactions`);
-              totalDeleted += deleteResult.deletedCount;
-            }
-          }
-          
-          logger.info(`Emergency cleanup completed: removed ${totalDeleted} transactions in total`);
-        }
+        const additionalDeleted = await this.performEmergencyCleanup(collection, collectionSize);
+        totalDeleted += additionalDeleted;
       }
 
       return totalDeleted;
     } catch (error) {
       logger.error(`Error in transactionService.cleanupOldTransactions: ${error.message}`);
+      return 0;
+    }
+  },
+  
+  /**
+   * Perform emergency cleanup when the collection size is too large
+   * @param {Collection} collection - MongoDB collection
+   * @param {Object} collectionSize - Collection size info
+   * @returns {Promise<number>} Number of deleted documents
+   */
+  async performEmergencyCleanup(collection, collectionSize) {
+    try {
+      logger.warn(`MongoDB collection size exceeds threshold (${collectionSize.sizeMB.toFixed(2)}MB), performing additional cleanup`);
+      
+      // Get transaction counts by group
+      const groupStats = await collection.aggregate([
+        { $group: { 
+            _id: "$groupId", 
+            count: { $sum: 1 } 
+          } 
+        },
+        { $sort: { count: -1 } },
+        { $limit: 10 }
+      ]).toArray();
+      
+      // Focus cleanup on high-volume groups
+      let totalRemoved = 0;
+      
+      for (const group of groupStats) {
+        if (group.count > 1000) {
+          // Determine how many to remove (40% of this group's transactions)
+          const removeCount = Math.floor(group.count * 0.4);
+          
+          // Get oldest documents in this group
+          const oldestDocs = await collection.find({ groupId: group._id })
+            .sort({ timestamp: 1 })
+            .limit(removeCount)
+            .project({ _id: 1 })
+            .toArray();
+            
+          if (oldestDocs.length > 0) {
+            const ids = oldestDocs.map(doc => doc._id);
+            
+            // Delete in batches to avoid timeout issues
+            const BATCH_SIZE = 1000;
+            for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+              const batchIds = ids.slice(i, i + BATCH_SIZE);
+              const result = await collection.deleteMany({ _id: { $in: batchIds } });
+              totalRemoved += result.deletedCount;
+            }
+            
+            logger.info(`Emergency cleanup: removed ${totalRemoved} old transactions from group ${group._id}`);
+          }
+        }
+      }
+      
+      // If group-based cleanup wasn't sufficient, do a global cleanup based on timestamp
+      if (totalRemoved < collectionSize.count * 0.2) {
+        logger.info(`Additional global cleanup needed, performing timestamp-based cleanup`);
+        
+        // Find a cutoff timestamp that would remove 20% of remaining documents
+        const minTs = await collection.find().sort({ timestamp: 1 }).limit(1).project({ timestamp: 1 }).toArray();
+        const maxTs = await collection.find().sort({ timestamp: -1 }).limit(1).project({ timestamp: 1 }).toArray();
+        
+        if (minTs.length > 0 && maxTs.length > 0) {
+          const minTime = new Date(minTs[0].timestamp).getTime();
+          const maxTime = new Date(maxTs[0].timestamp).getTime();
+          const timeRange = maxTime - minTime;
+          
+          // Target removing the oldest 20% of documents
+          const cutoffTime = new Date(minTime + (timeRange * 0.2));
+          
+          // Delete all transactions older than cutoff
+          const result = await collection.deleteMany({ timestamp: { $lt: cutoffTime } });
+          totalRemoved += result.deletedCount;
+          
+          logger.info(`Global timestamp cleanup: removed ${result.deletedCount} transactions before ${cutoffTime.toISOString()}`);
+        }
+      }
+      
+      return totalRemoved;
+    } catch (error) {
+      logger.error(`Error in emergency cleanup: ${error.message}`);
       return 0;
     }
   }
